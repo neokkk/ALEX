@@ -68,7 +68,7 @@ class LinearModel {
 
   LinearModel() = default;
   LinearModel(double a, double b) : a_(a), b_(b) {}
-  explicit LinearModel(const LinearModel& other) : a_(other.a_), b_(other.b_) {}
+  explicit LinearModel(const LinearModel &other) : a_(other.a_), b_(other.b_) {}
 
   void expand(double expansion_factor) {
     a_ *= expansion_factor;
@@ -86,10 +86,10 @@ class LinearModel {
 
 template <class T>
 class LinearModelBuilder {
- public:
-  LinearModel<T>* model_;
+public:
+  LinearModel<T> *model_;
 
-  explicit LinearModelBuilder<T>(LinearModel<T>* model) : model_(model) {}
+  explicit LinearModelBuilder<T>(LinearModel<T> *model) : model_(model) {}
 
   inline void add(T x, int y) {
     count_++;
@@ -132,7 +132,7 @@ class LinearModelBuilder {
     }
   }
 
- private:
+private:
   int count_ = 0;
   long double x_sum_ = 0;
   long double y_sum_ = 0;
@@ -147,8 +147,8 @@ class LinearModelBuilder {
 /*** Comparison ***/
 
 struct AlexCompare {
-  template <class T1, class T2>
-  bool operator()(const T1& x, const T2& y) const {
+  template<class T1, class T2>
+  bool operator()(const T1 &x, const T2 &y) const {
     static_assert(
         std::is_arithmetic<T1>::value && std::is_arithmetic<T2>::value,
         "Comparison types must be numeric.");
@@ -186,12 +186,12 @@ inline int get_offset(int word_id, uint64_t bit) {
 /*** Cost model weights ***/
 
 // Intra-node cost weights
-constexpr double kExpSearchIterationsWeight = 20;
-constexpr double kShiftsWeight = 0.5;
+double kExpSearchIterationsWeight = 20;
+double kShiftsWeight = 0.5;
 
 // TraverseToLeaf cost weights
-constexpr double kNodeLookupsWeight = 20;
-constexpr double kModelSizeWeight = 5e-7;
+double kNodeLookupsWeight = 20;
+double kModelSizeWeight = 5e-7;
 
 /*** Stat Accumulators ***/
 
@@ -210,7 +210,7 @@ struct SampleDataNodeStats {
 // Accumulates stats that are used in the cost model, based on the actual vs
 // predicted position of a key
 class StatAccumulator {
- public:
+public:
   virtual ~StatAccumulator() = default;
   virtual void accumulate(int actual_position, int predicted_position) = 0;
   virtual double get_stat() = 0;
@@ -220,7 +220,7 @@ class StatAccumulator {
 // Mean log error represents the expected number of exponential search
 // iterations when doing a lookup
 class ExpectedSearchIterationsAccumulator : public StatAccumulator {
- public:
+public:
   void accumulate(int actual_position, int predicted_position) override {
     cumulative_log_error_ +=
         std::log2(std::abs(predicted_position - actual_position) + 1);
@@ -237,7 +237,7 @@ class ExpectedSearchIterationsAccumulator : public StatAccumulator {
     count_ = 0;
   }
 
- public:
+public:
   double cumulative_log_error_ = 0;
   int count_ = 0;
 };
@@ -279,7 +279,7 @@ class ExpectedShiftsAccumulator : public StatAccumulator {
     count_ = 0;
   }
 
- public:
+public:
   int last_position_ = -1;
   int dense_region_start_idx_ = 0;
   long long num_expected_shifts_ = 0;
@@ -289,7 +289,7 @@ class ExpectedShiftsAccumulator : public StatAccumulator {
 
 // Combines ExpectedSearchIterationsAccumulator and ExpectedShiftsAccumulator
 class ExpectedIterationsAndShiftsAccumulator : public StatAccumulator {
- public:
+public:
   ExpectedIterationsAndShiftsAccumulator() = default;
   explicit ExpectedIterationsAndShiftsAccumulator(int data_capacity)
       : data_capacity_(data_capacity) {}
@@ -334,7 +334,7 @@ class ExpectedIterationsAndShiftsAccumulator : public StatAccumulator {
     count_ = 0;
   }
 
- public:
+public:
   double cumulative_log_error_ = 0;
   int last_position_ = -1;
   int dense_region_start_idx_ = 0;
@@ -378,14 +378,14 @@ class CPUID {
 #endif
   }
 
-  const uint32_t& EAX() const { return regs[0]; }
-  const uint32_t& EBX() const { return regs[1]; }
-  const uint32_t& ECX() const { return regs[2]; }
-  const uint32_t& EDX() const { return regs[3]; }
+  const uint32_t &EAX() const { return regs[0]; }
+  const uint32_t &EBX() const { return regs[1]; }
+  const uint32_t &ECX() const { return regs[2]; }
+  const uint32_t &EDX() const { return regs[3]; }
 };
 
 // https://en.wikipedia.org/wiki/CPUID#EAX=7,_ECX=0:_Extended_Features
-inline bool cpu_supports_bmi() {
+bool cpu_supports_bmi() {
   return static_cast<bool>(CPUID(7, 0).EBX() & (1 << 3));
 }
 }

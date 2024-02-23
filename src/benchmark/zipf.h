@@ -6,7 +6,7 @@
 // https://github.com/brianfrankcooper/YCSB/blob/master/core/src/main/java/site/ycsb/generator/ZipfianGenerator.java
 
 class ScrambledZipfianGenerator {
- public:
+public:
   static constexpr double ZETAN = 26.46902820178302;
   static constexpr double ZIPFIAN_CONSTANT = 0.99;
 
@@ -27,8 +27,8 @@ class ScrambledZipfianGenerator {
   int nextValue() {
     double u = dis_(gen_);
     double uz = u * ZETAN;
-
     int ret;
+    
     if (uz < 1.0) {
       ret = 0;
     } else if (uz < 1.0 + std::pow(0.5, ZIPFIAN_CONSTANT)) {
@@ -52,10 +52,12 @@ class ScrambledZipfianGenerator {
   // FNV hash from https://create.stephan-brumme.com/fnv-hash/
   static const uint32_t PRIME = 0x01000193;  //   16777619
   static const uint32_t SEED = 0x811C9DC5;   // 2166136261
+
   /// hash a single byte
   inline uint32_t fnv1a(unsigned char oneByte, uint32_t hash = SEED) {
     return (oneByte ^ hash) * PRIME;
   }
+
   /// hash a 32 bit integer (four bytes)
   inline uint32_t fnv1a(int fourBytes, uint32_t hash = SEED) {
     const unsigned char* ptr = (const unsigned char*)&fourBytes;
