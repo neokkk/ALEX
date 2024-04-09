@@ -62,7 +62,7 @@ class LinearModelBuilder;
 // Linear regression model
 template <class T>
 class LinearModel {
- public:
+public:
   double a_ = 0;  // slope
   double b_ = 0;  // intercept
 
@@ -118,10 +118,10 @@ public:
     }
 
     auto slope = static_cast<double>(
-        (static_cast<long double>(count_) * xy_sum_ - x_sum_ * y_sum_) /
-        (static_cast<long double>(count_) * xx_sum_ - x_sum_ * x_sum_));
+      (static_cast<long double>(count_) * xy_sum_ - x_sum_ * y_sum_) /
+      (static_cast<long double>(count_) * xx_sum_ - x_sum_ * x_sum_));
     auto intercept = static_cast<double>(
-        (y_sum_ - static_cast<long double>(slope) * x_sum_) / count_);
+      (y_sum_ - static_cast<long double>(slope) * x_sum_) / count_);
     model_->a_ = slope;
     model_->b_ = intercept;
 
@@ -147,11 +147,11 @@ private:
 /*** Comparison ***/
 
 struct AlexCompare {
-  template<class T1, class T2>
+  template <class T1, class T2>
   bool operator()(const T1 &x, const T2 &y) const {
     static_assert(
-        std::is_arithmetic<T1>::value && std::is_arithmetic<T2>::value,
-        "Comparison types must be numeric.");
+      std::is_arithmetic<T1>::value && std::is_arithmetic<T2>::value,
+      "Comparison types must be numeric.");
     return x < y;
   }
 };
@@ -207,6 +207,20 @@ struct SampleDataNodeStats {
   double log2_num_shifts = 0;
 };
 
+struct LatencyStats {
+  unsigned int id;
+  double find_key = 0;
+  double insert_key = 0;
+  double find_cost = 0;
+  double expand = 0;
+  double retrain = 0;
+  double split = 0;
+  double stat = 0;
+  double shift = 0;
+};
+
+std::vector<LatencyStats> latency_stats_;
+
 // Accumulates stats that are used in the cost model, based on the actual vs
 // predicted position of a key
 class StatAccumulator {
@@ -222,8 +236,7 @@ public:
 class ExpectedSearchIterationsAccumulator : public StatAccumulator {
 public:
   void accumulate(int actual_position, int predicted_position) override {
-    cumulative_log_error_ +=
-        std::log2(std::abs(predicted_position - actual_position) + 1);
+    cumulative_log_error_ += std::log2(std::abs(predicted_position - actual_position) + 1);
     count_++;
   }
 
@@ -244,9 +257,9 @@ public:
 
 // Mean shifts represents the expected number of shifts when doing an insert
 class ExpectedShiftsAccumulator : public StatAccumulator {
- public:
+public:
   explicit ExpectedShiftsAccumulator(int data_capacity)
-      : data_capacity_(data_capacity) {}
+    : data_capacity_(data_capacity) {}
 
   // A dense region of n keys will contribute a total number of expected shifts
   // of approximately
@@ -292,19 +305,18 @@ class ExpectedIterationsAndShiftsAccumulator : public StatAccumulator {
 public:
   ExpectedIterationsAndShiftsAccumulator() = default;
   explicit ExpectedIterationsAndShiftsAccumulator(int data_capacity)
-      : data_capacity_(data_capacity) {}
+    : data_capacity_(data_capacity) {}
 
   void accumulate(int actual_position, int predicted_position) override {
-    cumulative_log_error_ +=
-        std::log2(std::abs(predicted_position - actual_position) + 1);
+    cumulative_log_error_ += std::log2(std::abs(predicted_position - actual_position) + 1);
 
     if (actual_position > last_position_ + 1) {
       long long dense_region_length = last_position_ - dense_region_start_idx_ + 1;
       num_expected_shifts_ += (dense_region_length * dense_region_length) / 4;
       dense_region_start_idx_ = actual_position;
     }
-    last_position_ = actual_position;
 
+    last_position_ = actual_position;
     count_++;
   }
 
@@ -367,7 +379,7 @@ inline int log_2_round_down(int x) {
 class CPUID {
   uint32_t regs[4];
 
- public:
+public:
   explicit CPUID(unsigned i, unsigned j) {
 #ifdef _WIN32
     __cpuidex((int*)regs, (int)i, (int)j);
