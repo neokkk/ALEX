@@ -627,7 +627,7 @@ private:
 
   /*** Bulk loading ***/
 
- public:
+public:
   // values should be the sorted array of key-payload pairs.
   // The number of elements should be num_keys.
   // The index must be empty when calling this method.
@@ -640,8 +640,7 @@ private:
     stats_.num_keys = num_keys;
 
     // Build temporary root model, which outputs a CDF in the range [0, 1]
-    root_node_ =
-        new (model_node_allocator().allocate(1)) model_node_type(0, allocator_);
+    root_node_ = new (model_node_allocator().allocate(1)) model_node_type(0, allocator_);
     T min_key = values[0].first;
     T max_key = values[num_keys - 1].first;
     root_node_->model_.a_ = 1.0 / (max_key - min_key);
@@ -653,13 +652,12 @@ private:
                                 params_.approximate_model_computation);
     DataNodeStats stats;
     root_node_->cost_ = data_node_type::compute_expected_cost(
-        values, num_keys, data_node_type::kInitDensity_,
-        params_.expected_insert_frac, &root_data_node_model,
-        params_.approximate_cost_computation, &stats);
+      values, num_keys, data_node_type::kInitDensity_,
+      params_.expected_insert_frac, &root_data_node_model,
+      params_.approximate_cost_computation, &stats);
 
     // Recursively bulk load
-    bulk_load_node(values, num_keys, root_node_, num_keys,
-                   &root_data_node_model);
+    bulk_load_node(values, num_keys, root_node_, num_keys, &root_data_node_model);
 
     if (root_node_->is_leaf_) {
       static_cast<data_node_type *>(root_node_)->expected_avg_exp_search_iterations_ = stats.num_search_iterations;
@@ -669,6 +667,31 @@ private:
     create_superroot();
     update_superroot_key_domain();
     link_all_data_nodes();
+  }
+
+  void print() {
+    print_latency_stats();
+  }
+
+  void print_latency_stats() {
+    std::sort(latency_stats_.begin(), latency_stats_.end(),
+      [](const LatencyStats &a, const LatencyStats &b) {
+        return a.total < b.total;
+      });
+
+    std::ofstream ofs("latency_stats.csv");
+    if (!ofs.is_open()) {
+      ofs << "id,find_key,insert_key,find_cost,expand,retrain,split,stat,shift,total" << std::endl;
+      ofs.close();
+    }
+    ofs.open("latency_stats.csv", std::ofstream::out | std::ofstream::app);
+    for (const auto &lstats : latency_stats_) {
+      ofs << lstats.id << "," << lstats.find_key << "," << lstats.insert_key << ","
+          << lstats.find_cost << "," << lstats.expand << "," << lstats.retrain << ","
+          << lstats.split << "," << lstats.stat << "," << lstats.shift << ","
+          << lstats.total << std::endl;
+    }
+    ofs.close();
   }
 
 private:
@@ -709,16 +732,14 @@ private:
   // data_node_model is what the node's model would be if it were a data node of
   // dense keys.
   void bulk_load_node(const V values[], int num_keys, AlexNode<T, P> *&node,
-                      int total_keys,
-                      const LinearModel<T> *data_node_model = nullptr) {
+                      int total_keys, const LinearModel<T> *data_node_model = nullptr) {
     // Automatically convert to data node when it is impossible to be better
     // than current cost
-    if (num_keys <= derived_params_.max_data_node_slots *
-                        data_node_type::kInitDensity_ &&
-        (node->cost_ < kNodeLookupsWeight || node->model_.a_ == 0)) {
+    if (num_keys <= derived_params_.max_data_node_slots * data_node_type::kInitDensity_ &&
+      (node->cost_ < kNodeLookupsWeight || node->model_.a_ == 0)) {
       stats_.num_data_nodes++;
       auto data_node = new (data_node_allocator().allocate(1))
-          data_node_type(node->level_, derived_params_.max_data_node_slots, key_less_, allocator_);
+        data_node_type(node->level_, derived_params_.max_data_node_slots, key_less_, allocator_);
       data_node->bulk_load(values, num_keys, data_node_model, params_.approximate_model_computation);
       data_node->cost_ = node->cost_;
       delete_node(node);
@@ -732,18 +753,18 @@ private:
     std::pair<int, double> best_fanout_stats;
     if (experimental_params_.fanout_selection_method == 0) {
       int max_data_node_keys = static_cast<int>(
-          derived_params_.max_data_node_slots * data_node_type::kInitDensity_);
+        derived_params_.max_data_node_slots * data_node_type::kInitDensity_);
       best_fanout_stats = fanout_tree::find_best_fanout_bottom_up<T, P>(
-          values, num_keys, node, total_keys, used_fanout_tree_nodes,
-          derived_params_.max_fanout, max_data_node_keys,
-          params_.expected_insert_frac, params_.approximate_model_computation,
-          params_.approximate_cost_computation, key_less_);
+        values, num_keys, node, total_keys, used_fanout_tree_nodes,
+        derived_params_.max_fanout, max_data_node_keys,
+        params_.expected_insert_frac, params_.approximate_model_computation,
+        params_.approximate_cost_computation, key_less_);
     } else if (experimental_params_.fanout_selection_method == 1) {
       best_fanout_stats = fanout_tree::find_best_fanout_top_down<T, P>(
-          values, num_keys, node, total_keys, used_fanout_tree_nodes,
-          derived_params_.max_fanout, params_.expected_insert_frac,
-          params_.approximate_model_computation,
-          params_.approximate_cost_computation, key_less_);
+        values, num_keys, node, total_keys, used_fanout_tree_nodes,
+        derived_params_.max_fanout, params_.expected_insert_frac,
+        params_.approximate_model_computation,
+        params_.approximate_cost_computation, key_less_);
     }
     int best_fanout_tree_depth = best_fanout_stats.first;
     double best_fanout_tree_cost = best_fanout_stats.second;
@@ -762,16 +783,15 @@ private:
         // would satisfy that condition
         // in expectation
         best_fanout_tree_depth =
-            static_cast<int>(std::log2(static_cast<double>(num_keys) /
-                                       derived_params_.max_data_node_slots)) + 1;
+          static_cast<int>(std::log2(static_cast<double>(num_keys) / derived_params_.max_data_node_slots)) + 1;
         used_fanout_tree_nodes.clear();
         int max_data_node_keys = static_cast<int>(
-            derived_params_.max_data_node_slots * data_node_type::kInitDensity_);
+          derived_params_.max_data_node_slots * data_node_type::kInitDensity_);
         fanout_tree::compute_level<T, P>(
-            values, num_keys, node, total_keys, used_fanout_tree_nodes,
-            best_fanout_tree_depth, max_data_node_keys,
-            params_.expected_insert_frac, params_.approximate_model_computation,
-            params_.approximate_cost_computation);
+          values, num_keys, node, total_keys, used_fanout_tree_nodes,
+          best_fanout_tree_depth, max_data_node_keys,
+          params_.expected_insert_frac, params_.approximate_model_computation,
+          params_.approximate_cost_computation);
       }
 
       int fanout = 1 << best_fanout_tree_depth;
@@ -804,10 +824,10 @@ private:
         model_node->children_[cur]->duplication_factor_ = static_cast<uint8_t>(best_fanout_tree_depth - tree_node.level);
         if (model_node->children_[cur]->is_leaf_) {
           static_cast<data_node_type *>(model_node->children_[cur])
-              ->expected_avg_exp_search_iterations_ =
-              tree_node.expected_avg_search_iterations;
+            ->expected_avg_exp_search_iterations_ =
+            tree_node.expected_avg_search_iterations;
           static_cast<data_node_type *>(model_node->children_[cur])
-              ->expected_avg_shifts_ = tree_node.expected_avg_shifts;
+            ->expected_avg_shifts_ = tree_node.expected_avg_shifts;
         }
         for (int i = cur + 1; i < cur + repeats; i++) {
           model_node->children_[i] = model_node->children_[cur];
@@ -1098,11 +1118,12 @@ public:
   // found.
   std::pair<Iterator, bool> insert(const T &key, const P &payload) {
     LatencyStats lstats;
-    lstats.id = num_inserts_;
+    lstats.id = stats_.num_inserts;
+
+    auto total_start_time = std::chrono::high_resolution_clock::now();
 
     // If enough keys fall outside the key domain, expand the root to expand the
     // key domain
-    auto expand_start_time = std::chrono::high_resolution_clock::now();
     if (key > istats_.key_domain_max_) {
       istats_.num_keys_above_key_domain++;
       if (should_expand_right()) {
@@ -1115,7 +1136,7 @@ public:
       }
     }
     auto expand_end_time = std::chrono::high_resolution_clock::now();
-    lstats.expand += std::chrono::duration_cast<std::chrono::nanoseconds>(expand_end_time - expand_start_time).count();
+    lstats.expand += std::chrono::duration_cast<std::chrono::nanoseconds>(expand_end_time - total_start_time).count();
 
     data_node_type *leaf = get_leaf(key);
 
@@ -1222,6 +1243,9 @@ public:
         }
       }
     }
+
+    auto total_end_time = std::chrono::high_resolution_clock::now();
+    lstats.total += std::chrono::duration_cast<std::chrono::nanoseconds>(total_end_time - total_start_time).count();
 
     if (lstats.id % 20000 == 0) {
       latency_stats_.push_back(lstats);

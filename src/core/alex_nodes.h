@@ -328,7 +328,7 @@ class AlexDataNode : public AlexNode<T, P> {
   // Bitmap: each uint64_t represents 64 positions in reverse order
   // (i.e., each uint64_t is "read" from the right-most bit to the left-most
   // bit)
-  uint64_t* bitmap_ = nullptr;
+  uint64_t *bitmap_ = nullptr;
   int bitmap_size_ = 0;  // number of int64_t in bitmap
 
   // Variables related to resizing (expansions and contractions)
@@ -376,7 +376,7 @@ class AlexDataNode : public AlexNode<T, P> {
     : AlexNode<T, P>(0, true), key_less_(comp), allocator_(alloc) {}
 
   AlexDataNode(short level, int max_data_node_slots,
-               const Compare& comp = Compare(), const Alloc& alloc = Alloc())
+               const Compare &comp = Compare(), const Alloc &alloc = Alloc())
     : AlexNode<T, P>(level, true),
       key_less_(comp),
       allocator_(alloc),
@@ -398,7 +398,7 @@ class AlexDataNode : public AlexNode<T, P> {
     bitmap_allocator().deallocate(bitmap_, bitmap_size_);
   }
 
-  AlexDataNode(const self_type& other)
+  AlexDataNode(const self_type &other)
     : AlexNode<T, P>(other),
       key_less_(other.key_less_),
       allocator_(other.allocator_),
@@ -588,15 +588,14 @@ class AlexDataNode : public AlexNode<T, P> {
             typename value_return_type>
   class Iterator {
    public:
-    node_type* node_;
+    node_type *node_;
     int cur_idx_ = 0;  // current position in key/data_slots, -1 if at end
     int cur_bitmap_idx_ = 0;  // current position in bitmap
-    uint64_t cur_bitmap_data_ =
-        0;  // caches the relevant data in the current bitmap position
+    uint64_t cur_bitmap_data_ = 0;  // caches the relevant data in the current bitmap position
 
-    explicit Iterator(node_type* node) : node_(node) {}
+    explicit Iterator(node_type *node) : node_(node) {}
 
-    Iterator(node_type* node, int idx) : node_(node), cur_idx_(idx) {
+    Iterator(node_type *node, int idx) : node_(node), cur_idx_(idx) {
       initialize();
     }
 
@@ -627,8 +626,7 @@ class AlexDataNode : public AlexNode<T, P> {
 
 #if ALEX_DATA_NODE_SEP_ARRAYS
     V operator*() const {
-      return std::make_pair(node_->key_slots_[cur_idx_],
-                            node_->payload_slots_[cur_idx_]);
+      return std::make_pair(node_->key_slots_[cur_idx_], node_->payload_slots_[cur_idx_]);
     }
 #else
     value_return_type& operator*() const {
@@ -636,7 +634,7 @@ class AlexDataNode : public AlexNode<T, P> {
     }
 #endif
 
-    const T& key() const {
+    const T &key() const {
 #if ALEX_DATA_NODE_SEP_ARRAYS
       return node_->key_slots_[cur_idx_];
 #else
@@ -644,7 +642,7 @@ class AlexDataNode : public AlexNode<T, P> {
 #endif
     }
 
-    payload_return_type& payload() const {
+    payload_return_type &payload() const {
 #if ALEX_DATA_NODE_SEP_ARRAYS
       return node_->payload_slots_[cur_idx_];
 #else
@@ -679,18 +677,17 @@ class AlexDataNode : public AlexNode<T, P> {
     if (num_inserts_ + num_lookups_ == 0) {
       return 0;
     }
-    return num_exp_search_iterations_ /
-           static_cast<double>(num_inserts_ + num_lookups_);
+    return num_exp_search_iterations_ / static_cast<double>(num_inserts_ + num_lookups_);
   }
 
   double empirical_cost() const {
     if (num_inserts_ + num_lookups_ == 0) {
       return 0;
     }
-    double frac_inserts =
-        static_cast<double>(num_inserts_) / (num_inserts_ + num_lookups_);
-    return kExpSearchIterationsWeight * exp_search_iterations_per_operation() +
-           kShiftsWeight * shifts_per_insert() * frac_inserts;
+    double frac_inserts = static_cast<double>(num_inserts_) / (num_inserts_ + num_lookups_);
+    return (
+      kExpSearchIterationsWeight * exp_search_iterations_per_operation() +
+      kShiftsWeight * shifts_per_insert() * frac_inserts);
   }
 
   // Empirical fraction of operations (either lookup or insert) that are inserts
@@ -720,16 +717,15 @@ class AlexDataNode : public AlexNode<T, P> {
     ExpectedShiftsAccumulator shifts_accumulator(data_capacity_);
     const_iterator_type it(this, 0);
     for (; !it.is_end(); it++) {
-      int predicted_position = std::max(
-          0, std::min(data_capacity_ - 1, this->model_.predict(it.key())));
+      int predicted_position = std::max(0, std::min(data_capacity_ - 1, this->model_.predict(it.key())));
       search_iters_accumulator.accumulate(it.cur_idx_, predicted_position);
       shifts_accumulator.accumulate(it.cur_idx_, predicted_position);
     }
     expected_avg_exp_search_iterations_ = search_iters_accumulator.get_stat();
     expected_avg_shifts_ = shifts_accumulator.get_stat();
     double cost =
-        kExpSearchIterationsWeight * expected_avg_exp_search_iterations_ +
-        kShiftsWeight * expected_avg_shifts_ * frac_inserts;
+      kExpSearchIterationsWeight * expected_avg_exp_search_iterations_ +
+      kShiftsWeight * expected_avg_shifts_ * frac_inserts;
     return cost;
   }
 
@@ -737,22 +733,20 @@ class AlexDataNode : public AlexNode<T, P> {
   // array of keys
   // Assumes existing_model is trained on the dense array of keys
   static double compute_expected_cost(
-      const V* values, int num_keys, double density,
+      const V *values, int num_keys, double density,
       double expected_insert_frac,
-      const LinearModel<T>* existing_model = nullptr, bool use_sampling = false,
-      DataNodeStats* stats = nullptr) {
+      const LinearModel<T> *existing_model = nullptr, bool use_sampling = false,
+      DataNodeStats *stats = nullptr) {
     if (use_sampling) {
       return compute_expected_cost_sampling(values, num_keys, density,
-                                            expected_insert_frac,
-                                            existing_model, stats);
+                                            expected_insert_frac, existing_model, stats);
     }
 
     if (num_keys == 0) {
       return 0;
     }
 
-    int data_capacity =
-        std::max(static_cast<int>(num_keys / density), num_keys + 1);
+    int data_capacity = std::max(static_cast<int>(num_keys / density), num_keys + 1);
 
     // Compute what the node's model would be
     LinearModel<T> model;
@@ -775,12 +769,11 @@ class AlexDataNode : public AlexNode<T, P> {
     } else {
       ExpectedIterationsAndShiftsAccumulator acc(data_capacity);
       build_node_implicit(values, num_keys, data_capacity, &acc, &model);
-      expected_avg_exp_search_iterations =
-          acc.get_expected_num_search_iterations();
+      expected_avg_exp_search_iterations = acc.get_expected_num_search_iterations();
       expected_avg_shifts = acc.get_expected_num_shifts();
     }
     cost = kExpSearchIterationsWeight * expected_avg_exp_search_iterations +
-           kShiftsWeight * expected_avg_shifts * expected_insert_frac;
+      kShiftsWeight * expected_avg_shifts * expected_insert_frac;
 
     if (stats) {
       stats->num_search_iterations = expected_avg_exp_search_iterations;
@@ -823,10 +816,10 @@ class AlexDataNode : public AlexNode<T, P> {
   // Uses progressive sampling: keep increasing the sample size until the
   // computed stats stop changing drastically
   static double compute_expected_cost_sampling(
-      const V *values, int num_keys, double density,
-      double expected_insert_frac,
-      const LinearModel<T> *existing_model = nullptr,
-      DataNodeStats *stats = nullptr) {
+    const V *values, int num_keys, double density,
+    double expected_insert_frac,
+    const LinearModel<T> *existing_model = nullptr,
+    DataNodeStats *stats = nullptr) {
     const static int min_sample_size = 25;
 
     // Stop increasing sample size if relative diff of stats between samples is
@@ -834,8 +827,7 @@ class AlexDataNode : public AlexNode<T, P> {
     const static double rel_diff_threshold = 0.2;
 
     // Equivalent threshold in log2-space
-    const static double abs_log2_diff_threshold =
-        std::log2(1 + rel_diff_threshold);
+    const static double abs_log2_diff_threshold = std::log2(1 + rel_diff_threshold);
 
     // Increase sample size by this many times each iteration
     const static int sample_size_multiplier = 2;
@@ -850,8 +842,7 @@ class AlexDataNode : public AlexNode<T, P> {
     // If the number of keys is sufficiently small, we do not sample
     if (num_keys < exact_computation_size_threshold) {
       return compute_expected_cost(values, num_keys, density,
-                                   expected_insert_frac, existing_model, false,
-                                   stats);
+                                   expected_insert_frac, existing_model, false, stats);
     }
 
     LinearModel<T> model;  // trained for full dense array
@@ -892,14 +883,12 @@ class AlexDataNode : public AlexNode<T, P> {
       if (expected_insert_frac == 0) {
         ExpectedSearchIterationsAccumulator acc;
         build_node_implicit_sampling(values, num_keys, sample_num_keys,
-                                     sample_data_capacity, step_size, &acc,
-                                     &sample_model);
+                                     sample_data_capacity, step_size, &acc, &sample_model);
         sample_stats.push_back({std::log2(sample_num_keys), acc.get_stat(), 0});
       } else {
         ExpectedIterationsAndShiftsAccumulator acc(sample_data_capacity);
         build_node_implicit_sampling(values, num_keys, sample_num_keys,
-                                     sample_data_capacity, step_size, &acc,
-                                     &sample_model);
+                                     sample_data_capacity, step_size, &acc, &sample_model);
         sample_stats.push_back({std::log2(sample_num_keys),
                                 acc.get_expected_num_search_iterations(),
                                 std::log2(acc.get_expected_num_shifts())});
@@ -1742,7 +1731,7 @@ class AlexDataNode : public AlexNode<T, P> {
       builder.build();
       auto retrain_end_time = std::chrono::high_resolution_clock::now();
       if (latest_stats.id == num_inserts_) {
-        latest_stats.retrain += std::chrono::duration_cast<std::chrono::nanoseconds>(retrain_end_time - rebuild_start_time).count();
+        latest_stats.retrain += std::chrono::duration_cast<std::chrono::nanoseconds>(retrain_end_time - retrain_start_time).count();
       }
 
       if (keep_left) {

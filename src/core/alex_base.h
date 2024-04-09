@@ -217,6 +217,7 @@ struct LatencyStats {
   double split = 0;
   double stat = 0;
   double shift = 0;
+  double total = 0;
 };
 
 std::vector<LatencyStats> latency_stats_;
@@ -333,8 +334,7 @@ public:
   double get_expected_num_shifts() {
     if (count_ == 0) return 0;
     long long dense_region_length = last_position_ - dense_region_start_idx_ + 1;
-    long long cur_num_expected_shifts =
-        num_expected_shifts_ + (dense_region_length * dense_region_length) / 4;
+    long long cur_num_expected_shifts = num_expected_shifts_ + (dense_region_length * dense_region_length) / 4;
     return cur_num_expected_shifts / static_cast<double>(count_);
   }
 
