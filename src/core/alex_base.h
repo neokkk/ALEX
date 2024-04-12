@@ -209,8 +209,8 @@ struct SampleDataNodeStats {
 
 struct LatencyStats {
   unsigned int id;
-  double find_key = 0;
-  double insert_key = 0;
+  double find_key = 0; // lookup
+  double insert_key = 0; // pure insert
   double find_cost = 0;
   double expand = 0;
   double retrain = 0;
@@ -218,6 +218,8 @@ struct LatencyStats {
   double stat = 0;
   double shift = 0;
   double total = 0;
+
+  explicit LatencyStats(unsigned int id) : id(id) {}
 };
 
 std::vector<LatencyStats> latency_stats_;

@@ -30,8 +30,11 @@
 
 #pragma once
 
+#include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <random>
+#include <sstream>
 #include <stack>
 #include <type_traits>
 
@@ -123,6 +126,27 @@ public:
     long long num_inserts = 0;
     double splitting_time = 0;
     double cost_computation_time = 0;
+
+    void print() {
+      std::cout << "num_keys: " << num_keys << std::endl;
+      std::cout << "num_model_nodes: " << num_model_nodes << std::endl;
+      std::cout << "num_data_nodes: " << num_data_nodes << std::endl;
+      std::cout << "num_expand_and_scales: " << num_expand_and_scales << std::endl;
+      std::cout << "num_expand_and_retrains: " << num_expand_and_retrains << std::endl;
+      std::cout << "num_downward_splits: " << num_downward_splits << std::endl;
+      std::cout << "num_sideways_splits: " << num_sideways_splits << std::endl;
+      std::cout << "num_model_node_expansions: " << num_model_node_expansions << std::endl;
+      std::cout << "num_model_node_splits: " << num_model_node_splits << std::endl;
+      std::cout << "num_downward_split_keys: " << num_downward_split_keys << std::endl;
+      std::cout << "num_sideways_split_keys: " << num_sideways_split_keys << std::endl;
+      std::cout << "num_model_node_expansion_pointers: " << num_model_node_expansion_pointers << std::endl;
+      std::cout << "num_model_node_split_pointers: " << num_model_node_split_pointers << std::endl;
+      std::cout << "num_node_lookups: " << num_node_lookups << std::endl;
+      std::cout << "num_lookups: " << num_lookups << std::endl;
+      std::cout << "num_inserts: " << num_inserts << std::endl;
+      std::cout << "splitting_time: " << splitting_time << std::endl;
+      std::cout << "cost_computation_time: " << cost_computation_time << std::endl;
+    }
   };
   Stats stats_;
 
@@ -200,8 +224,12 @@ private:
   // factor.
   static const int kOutOfDomainToleranceFactor = 2;
 
+  int num_failure = 0;
+
   Compare key_less_ = Compare();
   Alloc allocator_ = Alloc();
+
+  std::string dataset;
 
   /*** Constructors and setters ***/
 
@@ -247,7 +275,7 @@ public:
   // recommend directly using bulk_load() instead.
   template <class InputIterator>
   explicit Alex(InputIterator first, InputIterator last, const Compare &comp, const Alloc &alloc = Alloc())
-      : key_less_(comp), allocator_(alloc) {
+    : key_less_(comp), allocator_(alloc) {
     std::vector<V> values;
     for (auto it = first; it != last; ++it) {
       values.push_back(*it);
@@ -290,8 +318,7 @@ public:
 
   Alex &operator=(const self_type &other) {
     if (this != &other) {
-      for (NodeIterator node_it = NodeIterator(this); !node_it.is_end();
-           node_it.next()) {
+      for (NodeIterator node_it = NodeIterator(this); !node_it.is_end(); node_it.next()) {
         delete_node(node_it.current());
       }
       delete_node(superroot_);
@@ -594,6 +621,11 @@ public:
 
   Compare key_comp() const { return key_less_; }
 
+  void init(std::string &dataset) {
+    std::cout << "dataset: " << dataset << std::endl;
+    this->dataset = dataset;
+  }
+
 private:
   typename model_node_type::alloc_type model_node_allocator() {
     return typename model_node_type::alloc_type(allocator_);
@@ -670,26 +702,36 @@ public:
   }
 
   void print() {
+    std::cout << "num_failure: " << num_failure << std::endl;
+    
     print_latency_stats();
   }
 
   void print_latency_stats() {
-    std::sort(latency_stats_.begin(), latency_stats_.end(),
-      [](const LatencyStats &a, const LatencyStats &b) {
-        return a.total < b.total;
-      });
+    std::shuffle(latency_stats_.begin(), latency_stats_.end(), std::mt19937(std::random_device()()));
 
-    std::ofstream ofs("latency_stats.csv");
+    std::stringstream ss;
+    ss << dataset << "_latency_stats.csv";
+    
+    std::ofstream ofs(ss.str(), std::ofstream::out);
     if (!ofs.is_open()) {
-      ofs << "id,find_key,insert_key,find_cost,expand,retrain,split,stat,shift,total" << std::endl;
-      ofs.close();
+      std::cerr << "Fail to open file" << std::endl;
+      return;
     }
-    ofs.open("latency_stats.csv", std::ofstream::out | std::ofstream::app);
-    for (const auto &lstats : latency_stats_) {
-      ofs << lstats.id << "," << lstats.find_key << "," << lstats.insert_key << ","
-          << lstats.find_cost << "," << lstats.expand << "," << lstats.retrain << ","
-          << lstats.split << "," << lstats.stat << "," << lstats.shift << ","
-          << lstats.total << std::endl;
+    
+    ofs << "id,find_key,insert_key,find_cost,expand,retrain,split,stat,shift,total" << std::endl;\
+    for (int i = 0; i < latency_stats_.size(); i += 20000) {
+      const LatencyStats &lstats = latency_stats_[i];
+      ofs << lstats.id << ",";
+      ofs << lstats.find_key << ",";
+      ofs << lstats.insert_key << ",";
+      ofs << lstats.find_cost << ",";
+      ofs << lstats.expand << ",";
+      ofs << lstats.retrain << ",";
+      ofs << lstats.split << ",";
+      ofs << lstats.stat << ",";
+      ofs << lstats.shift << ",";
+      ofs << lstats.total << std::endl;
     }
     ofs.close();
   }
@@ -1117,11 +1159,10 @@ public:
   // Insert does not happen if duplicates are not allowed and duplicate is
   // found.
   std::pair<Iterator, bool> insert(const T &key, const P &payload) {
-    LatencyStats lstats;
-    lstats.id = stats_.num_inserts;
+    latency_stats_.emplace_back(stats_.num_inserts);
+    auto &lstats = latency_stats_.back();
 
     auto total_start_time = std::chrono::high_resolution_clock::now();
-
     // If enough keys fall outside the key domain, expand the root to expand the
     // key domain
     if (key > istats_.key_domain_max_) {
@@ -1138,7 +1179,10 @@ public:
     auto expand_end_time = std::chrono::high_resolution_clock::now();
     lstats.expand += std::chrono::duration_cast<std::chrono::nanoseconds>(expand_end_time - total_start_time).count();
 
+    auto search_start_time = std::chrono::high_resolution_clock::now();
     data_node_type *leaf = get_leaf(key);
+    auto search_end_time = std::chrono::high_resolution_clock::now();
+    lstats.find_key += std::chrono::duration_cast<std::chrono::nanoseconds>(search_end_time - search_start_time).count();
 
     // Nonzero fail flag means that the insert did not happen
     std::pair<int, int> ret = leaf->insert(key, payload);
@@ -1150,15 +1194,19 @@ public:
       return {Iterator(leaf, insert_pos), false};
     }
 
-    // If no insert, figure out what to do with the data node to decrease the
-    // cost
+    // If no insert, figure out what to do with the data node to decrease the cost
     if (fail) {
       std::vector<TraversalNode> traversal_path;
+      auto search_start_time = std::chrono::high_resolution_clock::now();
       get_leaf(key, &traversal_path);
+      auto search_end_time = std::chrono::high_resolution_clock::now();
+      lstats.find_key += std::chrono::duration_cast<std::chrono::nanoseconds>(search_end_time - search_start_time).count();
+
       model_node_type *parent = traversal_path.back().node;
+      num_failure++;
 
       while (fail) {
-        auto start_time = std::chrono::high_resolution_clock::now();
+        auto split_start_time = std::chrono::high_resolution_clock::now();
         stats_.num_expand_and_scales += leaf->num_resizes_;
 
         if (parent == superroot_) {
@@ -1186,15 +1234,18 @@ public:
         int best_fanout = 1 << fanout_tree_depth;
         auto cost_computation_time =
           std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::high_resolution_clock::now() - start_time).count();
+            std::chrono::high_resolution_clock::now() - split_start_time).count();
         stats_.cost_computation_time += cost_computation_time;
         lstats.find_cost += cost_computation_time;
 
         if (fanout_tree_depth == 0) {
+          auto expand_start_time = std::chrono::high_resolution_clock::now();
           // expand existing data node and retrain model
           leaf->resize(data_node_type::kMinDensity_, true,
                        leaf->is_append_mostly_right(),
                        leaf->is_append_mostly_left());
+          auto expand_end_time = std::chrono::high_resolution_clock::now();
+          lstats.expand += std::chrono::duration_cast<std::chrono::nanoseconds>(expand_end_time - expand_start_time).count();
           fanout_tree::FTNode &tree_node = used_fanout_tree_nodes[0];
           leaf->cost_ = tree_node.cost;
           leaf->expected_avg_exp_search_iterations_ = tree_node.expected_avg_search_iterations;
@@ -1227,10 +1278,10 @@ public:
           }
           leaf = static_cast<data_node_type *>(parent->get_child_node(key));
         }
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto duration = end_time - start_time;
-        stats_.splitting_time += std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
-        lstats.split += std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
+        auto split_end_time = std::chrono::high_resolution_clock::now();
+        auto splitting_time = std::chrono::duration_cast<std::chrono::nanoseconds>(split_end_time - split_start_time).count();
+        stats_.splitting_time += splitting_time;
+        lstats.split += splitting_time;
 
         // Try again to insert the key
         ret = leaf->insert(key, payload);
@@ -1244,15 +1295,12 @@ public:
       }
     }
 
+    stats_.num_inserts++;
+    stats_.num_keys++;
+
     auto total_end_time = std::chrono::high_resolution_clock::now();
     lstats.total += std::chrono::duration_cast<std::chrono::nanoseconds>(total_end_time - total_start_time).count();
 
-    if (lstats.id % 20000 == 0) {
-      latency_stats_.push_back(lstats);
-    }
-
-    stats_.num_inserts++;
-    stats_.num_keys++;
     return {Iterator(leaf, insert_pos), true};
   }
 

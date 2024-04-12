@@ -72,8 +72,7 @@ class AlexModelNode : public AlexNode<T, P> {
  public:
   typedef AlexModelNode<T, P, Alloc> self_type;
   typedef typename Alloc::template rebind<self_type>::other alloc_type;
-  typedef typename Alloc::template rebind<AlexNode<T, P>*>::other
-      pointer_alloc_type;
+  typedef typename Alloc::template rebind<AlexNode<T, P> *>::other pointer_alloc_type;
 
   const Alloc &allocator_;
 
@@ -97,11 +96,10 @@ class AlexModelNode : public AlexNode<T, P> {
   }
 
   AlexModelNode(const self_type& other)
-      : AlexNode<T, P>(other),
-        allocator_(other.allocator_),
-        num_children_(other.num_children_) {
-    children_ = new (pointer_allocator().allocate(other.num_children_))
-        AlexNode<T, P>*[other.num_children_];
+    : AlexNode<T, P>(other),
+      allocator_(other.allocator_),
+      num_children_(other.num_children_) {
+    children_ = new (pointer_allocator().allocate(other.num_children_)) AlexNode<T, P>*[other.num_children_];
     std::copy(other.children_, other.children_ + other.num_children_, children_);
   }
 
@@ -160,6 +158,7 @@ class AlexModelNode : public AlexNode<T, P> {
       }
       return false;
     }
+
     if (num_children_ == 1) {
       if (verbose) {
         std::cout << "[Single child node] addr: " << this << ", level "
@@ -167,6 +166,7 @@ class AlexModelNode : public AlexNode<T, P> {
       }
       return false;
     }
+
     if (std::ceil(std::log2(num_children_)) !=
         std::floor(std::log2(num_children_))) {
       if (verbose) {
@@ -205,6 +205,7 @@ class AlexModelNode : public AlexNode<T, P> {
           }
           return false;
         }
+
         if (std::ceil(std::log2(cur_repeats)) !=
             std::floor(std::log2(cur_repeats))) {
           if (verbose) {
@@ -214,6 +215,7 @@ class AlexModelNode : public AlexNode<T, P> {
           }
           return false;
         }
+
         if (i % cur_repeats != 0) {
           if (verbose) {
             std::cout
@@ -229,6 +231,7 @@ class AlexModelNode : public AlexNode<T, P> {
         cur_repeats = 1;
       }
     }
+
     if (cur_repeats != (1 << cur_child->duplication_factor_)) {
       if (verbose) {
         std::cout << "[Incorrect duplication factor] num actual repeats: "
@@ -243,6 +246,7 @@ class AlexModelNode : public AlexNode<T, P> {
       }
       return false;
     }
+
     if (std::ceil(std::log2(cur_repeats)) !=
         std::floor(std::log2(cur_repeats))) {
       if (verbose) {
@@ -251,6 +255,7 @@ class AlexModelNode : public AlexNode<T, P> {
       }
       return false;
     }
+
     if (i % cur_repeats != 0) {
       if (verbose) {
         std::cout
@@ -262,6 +267,7 @@ class AlexModelNode : public AlexNode<T, P> {
       }
       return false;
     }
+
     if (cur_repeats == num_children_) {
       if (verbose) {
         std::cout << "[All children are the same] num actual repeats: "
@@ -269,6 +275,7 @@ class AlexModelNode : public AlexNode<T, P> {
                   << ", parent level: " << this->level_
                   << ", parent num children: " << num_children_ << std::endl;
       }
+
       return false;
     }
 
@@ -293,7 +300,7 @@ template <class T, class P, class Compare = AlexCompare,
           class Alloc = std::allocator<std::pair<T, P>>,
           bool allow_duplicates = true>
 class AlexDataNode : public AlexNode<T, P> {
- public:
+public:
   typedef std::pair<T, P> V;
   typedef AlexDataNode<T, P, Compare, Alloc, allow_duplicates> self_type;
   typedef typename Alloc::template rebind<self_type>::other alloc_type;
@@ -350,6 +357,8 @@ class AlexDataNode : public AlexNode<T, P> {
   int num_lookups_ = 0;                      // does not reset after resizing
   int num_inserts_ = 0;                      // does not reset after resizing
   int num_resizes_ = 0;  // technically not required, but nice to have
+
+  int id_not_equal = 0;
 
   // Variables for determining append-mostly behavior
   T max_key_ = std::numeric_limits<T>::lowest();  // max key in node, updates after inserts but not erases
@@ -524,6 +533,7 @@ class AlexDataNode : public AlexNode<T, P> {
     int num_keys = 0;
     int left_bitmap_idx = left >> 6;
     int right_bitmap_idx = right >> 6;
+
     if (left_bitmap_idx == right_bitmap_idx) {
       uint64_t bitmap_data = bitmap_[left_bitmap_idx];
       int left_bit_pos = left - (left_bitmap_idx << 6);
@@ -652,11 +662,11 @@ class AlexDataNode : public AlexNode<T, P> {
 
     bool is_end() const { return cur_idx_ == -1; }
 
-    bool operator==(const Iterator& rhs) const {
+    bool operator==(const Iterator &rhs) const {
       return cur_idx_ == rhs.cur_idx_;
     }
 
-    bool operator!=(const Iterator& rhs) const { return !(*this == rhs); };
+    bool operator!=(const Iterator &rhs) const { return !(*this == rhs); };
   };
 
   iterator_type begin() { return iterator_type(this, 0); }
@@ -1281,9 +1291,9 @@ class AlexDataNode : public AlexNode<T, P> {
     max_key_ = node->max_key_;
 
     expansion_threshold_ =
-        std::min(std::max(data_capacity_ * kMaxDensity_,
-                          static_cast<double>(num_keys_ + 1)),
-                 static_cast<double>(data_capacity_));
+      std::min(std::max(data_capacity_ * kMaxDensity_,
+                        static_cast<double>(num_keys_ + 1)),
+                static_cast<double>(data_capacity_));
     contraction_threshold_ = data_capacity_ * kMinDensity_;
   }
 
@@ -1380,19 +1390,17 @@ class AlexDataNode : public AlexNode<T, P> {
   // Unused function: builds a spline model by connecting the smallest and
   // largest points instead of using
   // a linear regression
-  static void build_spline(const V* values, int num_keys,
-                           const LinearModel<T>* model) {
+  static void build_spline(const V *values, int num_keys, const LinearModel<T> *model) {
     int y_max = num_keys - 1;
     int y_min = 0;
-    model->a_ = static_cast<double>(y_max - y_min) /
-                (values[y_max].first - values[y_min].first);
+    model->a_ = static_cast<double>(y_max - y_min) / (values[y_max].first - values[y_min].first);
     model->b_ = -1.0 * values[y_min].first * model->a_;
   }
 
   /*** Lookup ***/
 
   // Predicts the position of a key using the model
-  inline int predict_position(const T& key) const {
+  inline int predict_position(const T &key) const {
     int position = this->model_.predict(key);
     position = std::max<int>(std::min<int>(position, data_capacity_ - 1), 0);
     return position;
@@ -1400,7 +1408,7 @@ class AlexDataNode : public AlexNode<T, P> {
 
   // Searches for the last non-gap position equal to key
   // If no positions equal to key, returns -1
-  int find_key(const T& key) {
+  int find_key(const T &key) {
     num_lookups_++;
     int predicted_pos = predict_position(key);
 
@@ -1626,7 +1634,7 @@ class AlexDataNode : public AlexNode<T, P> {
   // already-existing key.
   // -1 if no insertion.
   std::pair<int, int> insert(const T &key, const P &payload) {
-    auto latest_stats = latency_stats_.back();
+    auto &lstats = latency_stats_.back();
 
     // Periodically check for catastrophe
     if (num_inserts_ % 64 == 0 && catastrophic_cost()) {
@@ -1652,18 +1660,14 @@ class AlexDataNode : public AlexNode<T, P> {
       resize(kMinDensity_, false, keep_left, keep_right);
       num_resizes_++;
       auto expand_end_time = std::chrono::high_resolution_clock::now();
-      if (latest_stats.id == num_inserts_) {
-        latest_stats.expand += std::chrono::duration_cast<std::chrono::nanoseconds>(expand_end_time - expand_start_time).count();
-      }
+      lstats.expand += std::chrono::duration_cast<std::chrono::nanoseconds>(expand_end_time - expand_start_time).count();
     }
 
     // Insert
     auto find_key_start_time = std::chrono::high_resolution_clock::now();
     std::pair<int, int> positions = find_insert_position(key);
     auto find_key_end_time = std::chrono::high_resolution_clock::now();
-    if (latest_stats.id == num_inserts_) {
-      latest_stats.find_key += std::chrono::duration_cast<std::chrono::nanoseconds>(find_key_end_time - find_key_start_time).count();
-    }
+    lstats.find_key += std::chrono::duration_cast<std::chrono::nanoseconds>(find_key_end_time - find_key_start_time).count();
 
     int upper_bound_pos = positions.second;
     if (!allow_duplicates && upper_bound_pos > 0 && key_equal(ALEX_DATA_NODE_KEY_AT(upper_bound_pos - 1), key)) {
@@ -1672,18 +1676,10 @@ class AlexDataNode : public AlexNode<T, P> {
     int insertion_position = positions.first;
     if (insertion_position < data_capacity_ && !check_exists(insertion_position)) {
       insert_element_at(key, payload, insertion_position);
+      auto insert_key_end_time = std::chrono::high_resolution_clock::now();
+      lstats.insert_key += std::chrono::duration_cast<std::chrono::nanoseconds>(insert_key_end_time - find_key_end_time).count();
     } else {
-      auto shift_start_time = std::chrono::high_resolution_clock::now();
       insertion_position = insert_using_shifts(key, payload, insertion_position);
-      auto shift_end_time = std::chrono::high_resolution_clock::now();
-      if (latest_stats.id == num_inserts_) {
-        latest_stats.shift += std::chrono::duration_cast<std::chrono::nanoseconds>(shift_end_time - shift_start_time).count();
-      }
-    }
-
-    auto insert_key_end_time = std::chrono::high_resolution_clock::now();
-    if (latest_stats.id == num_inserts_) {
-      latest_stats.insert_key += std::chrono::duration_cast<std::chrono::nanoseconds>(insert_key_end_time - find_key_end_time).count();
     }
 
     // Update stats
@@ -1719,20 +1715,17 @@ class AlexDataNode : public AlexNode<T, P> {
 
     // Retrain model if the number of keys is sufficiently small (under 50)
     if (num_keys_ < 50 || force_retrain) {
-      auto retrain_start_time = std::chrono::high_resolution_clock::now();
-
       const_iterator_type it(this, 0);
       LinearModelBuilder<T> builder(&(this->model_));
-      auto latest_stats = latency_stats_.back();
+      auto &lstats = latency_stats_.back();
+      auto retrain_start_time = std::chrono::high_resolution_clock::now();
 
       for (int i = 0; it.cur_idx_ < data_capacity_ && !it.is_end(); it++, i++) {
         builder.add(it.key(), i);
       }
       builder.build();
       auto retrain_end_time = std::chrono::high_resolution_clock::now();
-      if (latest_stats.id == num_inserts_) {
-        latest_stats.retrain += std::chrono::duration_cast<std::chrono::nanoseconds>(retrain_end_time - retrain_start_time).count();
-      }
+      lstats.retrain += std::chrono::duration_cast<std::chrono::nanoseconds>(retrain_end_time - retrain_start_time).count();
 
       if (keep_left) {
         this->model_.expand(static_cast<double>(data_capacity_) / num_keys_);
@@ -1860,9 +1853,13 @@ class AlexDataNode : public AlexNode<T, P> {
   // Insert key into pos, shifting as necessary in the range [left, right)
   // Returns the actual position of insertion
   int insert_using_shifts(const T &key, P payload, int pos) {
+    auto &lstats = latency_stats_.back();
+    auto shift_start_time = std::chrono::high_resolution_clock::now();
+
     // Find the closest gap
     int gap_pos = closest_gap(pos);
     set_bit(gap_pos);
+
     if (gap_pos >= pos) {
       for (int i = gap_pos; i > pos; i--) {
 #if ALEX_DATA_NODE_SEP_ARRAYS
@@ -1872,7 +1869,14 @@ class AlexDataNode : public AlexNode<T, P> {
         data_slots_[i] = data_slots_[i - 1];
 #endif
       }
+
+      auto shift_end_time = std::chrono::high_resolution_clock::now();
+      lstats.shift += std::chrono::duration_cast<std::chrono::nanoseconds>(shift_end_time - shift_start_time).count();
+
       insert_element_at(key, payload, pos);
+      auto insert_end_time = std::chrono::high_resolution_clock::now();
+      lstats.insert_key += std::chrono::duration_cast<std::chrono::nanoseconds>(insert_end_time - shift_end_time).count();
+
       num_shifts_ += gap_pos - pos;
       return pos;
     } else {
@@ -1884,7 +1888,14 @@ class AlexDataNode : public AlexNode<T, P> {
         data_slots_[i] = data_slots_[i + 1];
 #endif
       }
+
+      auto shift_end_time = std::chrono::high_resolution_clock::now();
+      lstats.shift += std::chrono::duration_cast<std::chrono::nanoseconds>(shift_end_time - shift_start_time).count();
+
       insert_element_at(key, payload, pos - 1);
+      auto insert_end_time = std::chrono::high_resolution_clock::now();
+      lstats.insert_key += std::chrono::duration_cast<std::chrono::nanoseconds>(insert_end_time - shift_end_time).count();
+
       num_shifts_ += pos - gap_pos - 1;
       return pos - 1;
     }
