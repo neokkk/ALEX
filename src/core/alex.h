@@ -660,6 +660,14 @@ private:
   /*** Bulk loading ***/
 
 public:
+  void set_density(double init_density, double delta) {
+    double min_density = std::max(0.1, init_density - delta);
+    double max_density = std::min(0.99, init_density + delta);
+    std::cout << "init_density: " << init_density << ", min_density: " << min_density << ", max_density: " << max_density << std::endl;
+    kInitDensity = init_density;
+    kMinDensity = min_density;
+    kMaxDensity = max_density;
+  }
   // values should be the sorted array of key-payload pairs.
   // The number of elements should be num_keys.
   // The index must be empty when calling this method.
@@ -684,7 +692,7 @@ public:
                                 params_.approximate_model_computation);
     DataNodeStats stats;
     root_node_->cost_ = data_node_type::compute_expected_cost(
-      values, num_keys, data_node_type::kInitDensity_,
+      values, num_keys, kInitDensity,
       params_.expected_insert_frac, &root_data_node_model,
       params_.approximate_cost_computation, &stats);
 
@@ -703,37 +711,6 @@ public:
 
   void print() {
     std::cout << "num_failure: " << num_failure << std::endl;
-    
-    print_latency_stats();
-  }
-
-  void print_latency_stats() {
-    std::shuffle(latency_stats_.begin(), latency_stats_.end(), std::mt19937(std::random_device()()));
-
-    std::stringstream ss;
-    ss << dataset << "_latency_stats.csv";
-    
-    std::ofstream ofs(ss.str(), std::ofstream::out);
-    if (!ofs.is_open()) {
-      std::cerr << "Fail to open file" << std::endl;
-      return;
-    }
-    
-    ofs << "id,find_key,insert_key,find_cost,expand,retrain,split,stat,shift,total" << std::endl;\
-    for (int i = 0; i < latency_stats_.size(); i += 20000) {
-      const LatencyStats &lstats = latency_stats_[i];
-      ofs << lstats.id << ",";
-      ofs << lstats.find_key << ",";
-      ofs << lstats.insert_key << ",";
-      ofs << lstats.find_cost << ",";
-      ofs << lstats.expand << ",";
-      ofs << lstats.retrain << ",";
-      ofs << lstats.split << ",";
-      ofs << lstats.stat << ",";
-      ofs << lstats.shift << ",";
-      ofs << lstats.total << std::endl;
-    }
-    ofs.close();
   }
 
 private:
@@ -777,7 +754,7 @@ private:
                       int total_keys, const LinearModel<T> *data_node_model = nullptr) {
     // Automatically convert to data node when it is impossible to be better
     // than current cost
-    if (num_keys <= derived_params_.max_data_node_slots * data_node_type::kInitDensity_ &&
+    if (num_keys <= derived_params_.max_data_node_slots * kInitDensity &&
       (node->cost_ < kNodeLookupsWeight || node->model_.a_ == 0)) {
       stats_.num_data_nodes++;
       auto data_node = new (data_node_allocator().allocate(1))
@@ -795,7 +772,7 @@ private:
     std::pair<int, double> best_fanout_stats;
     if (experimental_params_.fanout_selection_method == 0) {
       int max_data_node_keys = static_cast<int>(
-        derived_params_.max_data_node_slots * data_node_type::kInitDensity_);
+        derived_params_.max_data_node_slots * kInitDensity);
       best_fanout_stats = fanout_tree::find_best_fanout_bottom_up<T, P>(
         values, num_keys, node, total_keys, used_fanout_tree_nodes,
         derived_params_.max_fanout, max_data_node_keys,
@@ -813,7 +790,7 @@ private:
 
     // Decide whether this node should be a model node or data node
     if (best_fanout_tree_cost < node->cost_ ||
-        num_keys > derived_params_.max_data_node_slots * data_node_type::kInitDensity_) {
+        num_keys > derived_params_.max_data_node_slots * kInitDensity) {
       // Convert to model node based on the output of the fanout tree
       stats_.num_model_nodes++;
       auto model_node = new (model_node_allocator().allocate(1)) model_node_type(node->level_, allocator_);
@@ -828,7 +805,7 @@ private:
           static_cast<int>(std::log2(static_cast<double>(num_keys) / derived_params_.max_data_node_slots)) + 1;
         used_fanout_tree_nodes.clear();
         int max_data_node_keys = static_cast<int>(
-          derived_params_.max_data_node_slots * data_node_type::kInitDensity_);
+          derived_params_.max_data_node_slots * kInitDensity);
         fanout_tree::compute_level<T, P>(
           values, num_keys, node, total_keys, used_fanout_tree_nodes,
           best_fanout_tree_depth, max_data_node_keys,
@@ -1159,10 +1136,6 @@ public:
   // Insert does not happen if duplicates are not allowed and duplicate is
   // found.
   std::pair<Iterator, bool> insert(const T &key, const P &payload) {
-    latency_stats_.emplace_back(stats_.num_inserts);
-    auto &lstats = latency_stats_.back();
-
-    auto total_start_time = std::chrono::high_resolution_clock::now();
     // If enough keys fall outside the key domain, expand the root to expand the
     // key domain
     if (key > istats_.key_domain_max_) {
@@ -1176,13 +1149,8 @@ public:
         expand_root(key, true);  // expand to the left
       }
     }
-    auto expand_end_time = std::chrono::high_resolution_clock::now();
-    lstats.expand += std::chrono::duration_cast<std::chrono::nanoseconds>(expand_end_time - total_start_time).count();
 
-    auto search_start_time = std::chrono::high_resolution_clock::now();
     data_node_type *leaf = get_leaf(key);
-    auto search_end_time = std::chrono::high_resolution_clock::now();
-    lstats.find_key += std::chrono::duration_cast<std::chrono::nanoseconds>(search_end_time - search_start_time).count();
 
     // Nonzero fail flag means that the insert did not happen
     std::pair<int, int> ret = leaf->insert(key, payload);
@@ -1197,16 +1165,12 @@ public:
     // If no insert, figure out what to do with the data node to decrease the cost
     if (fail) {
       std::vector<TraversalNode> traversal_path;
-      auto search_start_time = std::chrono::high_resolution_clock::now();
       get_leaf(key, &traversal_path);
-      auto search_end_time = std::chrono::high_resolution_clock::now();
-      lstats.find_key += std::chrono::duration_cast<std::chrono::nanoseconds>(search_end_time - search_start_time).count();
 
       model_node_type *parent = traversal_path.back().node;
       num_failure++;
 
       while (fail) {
-        auto split_start_time = std::chrono::high_resolution_clock::now();
         stats_.num_expand_and_scales += leaf->num_resizes_;
 
         if (parent == superroot_) {
@@ -1236,16 +1200,14 @@ public:
           std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::high_resolution_clock::now() - split_start_time).count();
         stats_.cost_computation_time += cost_computation_time;
-        lstats.find_cost += cost_computation_time;
 
         if (fanout_tree_depth == 0) {
           auto expand_start_time = std::chrono::high_resolution_clock::now();
           // expand existing data node and retrain model
-          leaf->resize(data_node_type::kMinDensity_, true,
+          leaf->resize(kMinDensity, true,
                        leaf->is_append_mostly_right(),
                        leaf->is_append_mostly_left());
-          auto expand_end_time = std::chrono::high_resolution_clock::now();
-          lstats.expand += std::chrono::duration_cast<std::chrono::nanoseconds>(expand_end_time - expand_start_time).count();
+
           fanout_tree::FTNode &tree_node = used_fanout_tree_nodes[0];
           leaf->cost_ = tree_node.cost;
           leaf->expected_avg_exp_search_iterations_ = tree_node.expected_avg_search_iterations;
@@ -1281,7 +1243,6 @@ public:
         auto split_end_time = std::chrono::high_resolution_clock::now();
         auto splitting_time = std::chrono::duration_cast<std::chrono::nanoseconds>(split_end_time - split_start_time).count();
         stats_.splitting_time += splitting_time;
-        lstats.split += splitting_time;
 
         // Try again to insert the key
         ret = leaf->insert(key, payload);
@@ -1297,9 +1258,6 @@ public:
 
     stats_.num_inserts++;
     stats_.num_keys++;
-
-    auto total_end_time = std::chrono::high_resolution_clock::now();
-    lstats.total += std::chrono::duration_cast<std::chrono::nanoseconds>(total_end_time - total_start_time).count();
 
     return {Iterator(leaf, insert_pos), true};
   }

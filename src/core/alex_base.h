@@ -183,6 +183,14 @@ inline int get_offset(int word_id, uint64_t bit) {
   return (word_id << 6) + count_ones(bit - 1);
 }
 
+/*** Resizing densities ***/
+
+double kInitDensity = 0.7; // density of data nodes after bulk loading
+double kMinDensity = 0.6; // density after expanding, also
+                          // determines the contraction threshold
+double kMaxDensity = 0.8; // density after contracting,
+                          // also determines the expansion threshold
+
 /*** Cost model weights ***/
 
 // Intra-node cost weights
@@ -221,8 +229,6 @@ struct LatencyStats {
 
   explicit LatencyStats(unsigned int id) : id(id) {}
 };
-
-std::vector<LatencyStats> latency_stats_;
 
 // Accumulates stats that are used in the cost model, based on the actual vs
 // predicted position of a key

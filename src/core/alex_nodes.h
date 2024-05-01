@@ -338,14 +338,6 @@ public:
   uint64_t *bitmap_ = nullptr;
   int bitmap_size_ = 0;  // number of int64_t in bitmap
 
-  // Variables related to resizing (expansions and contractions)
-  static constexpr double kMaxDensity_ = 0.8;  // density after contracting,
-                                               // also determines the expansion
-                                               // threshold
-  static constexpr double kInitDensity_ = 0.7;  // density of data nodes after bulk loading
-  static constexpr double kMinDensity_ = 0.6;  // density after expanding, also
-                                               // determines the contraction
-                                               // threshold
   double expansion_threshold_ = 1;  // expand after m_num_keys is >= this number
   double contraction_threshold_ = 0;  // contract after m_num_keys is < this number
   static constexpr int kDefaultMaxDataNodeBytes_ = 1 << 24;  // by default, maximum data node size is 16MB
@@ -1113,7 +1105,7 @@ public:
   void bulk_load(const V values[], int num_keys,
                  const LinearModel<T> *pretrained_model = nullptr,
                  bool train_with_sample = false) {
-    initialize(num_keys, kInitDensity_);
+    initialize(num_keys, kInitDensity);
 
     if (num_keys == 0) {
       expansion_threshold_ = data_capacity_;
@@ -1182,10 +1174,10 @@ public:
       ALEX_DATA_NODE_KEY_AT(i) = kEndSentinel_;
     }
 
-    expansion_threshold_ = std::min(std::max(data_capacity_ * kMaxDensity_,
+    expansion_threshold_ = std::min(std::max(data_capacity_ * kMaxDensity,
                                              static_cast<double>(num_keys + 1)),
                                     static_cast<double>(data_capacity_));
-    contraction_threshold_ = data_capacity_ * kMinDensity_;
+    contraction_threshold_ = data_capacity_ * kMinDensity;
     min_key_ = values[0].first;
     max_key_ = values[num_keys - 1].first;
   }
@@ -1218,7 +1210,7 @@ public:
       this->model_.b_ = precomputed_model->b_;
     }
 
-    initialize(num_actual_keys, kMinDensity_);
+    initialize(num_actual_keys, kMinDensity);
     if (num_actual_keys == 0) {
       expansion_threshold_ = data_capacity_;
       contraction_threshold_ = 0;
@@ -1230,10 +1222,10 @@ public:
 
     // Special casing if existing node was append-mostly
     if (keep_left) {
-      this->model_.expand((num_actual_keys / kMaxDensity_) / num_keys_);
+      this->model_.expand((num_actual_keys / kMaxDensity) / num_keys_);
     } else if (keep_right) {
-      this->model_.expand((num_actual_keys / kMaxDensity_) / num_keys_);
-      this->model_.b_ += (data_capacity_ - (num_actual_keys / kMaxDensity_));
+      this->model_.expand((num_actual_keys / kMaxDensity) / num_keys_);
+      this->model_.b_ += (data_capacity_ - (num_actual_keys / kMaxDensity));
     } else {
       this->model_.expand(static_cast<double>(data_capacity_) / num_keys_);
     }
@@ -1291,10 +1283,10 @@ public:
     max_key_ = node->max_key_;
 
     expansion_threshold_ =
-      std::min(std::max(data_capacity_ * kMaxDensity_,
+      std::min(std::max(data_capacity_ * kMaxDensity,
                         static_cast<double>(num_keys_ + 1)),
                 static_cast<double>(data_capacity_));
-    contraction_threshold_ = data_capacity_ * kMinDensity_;
+    contraction_threshold_ = data_capacity_ * kMinDensity;
   }
 
   static void build_model(const V *values, int num_keys, LinearModel<T> *model,
@@ -1449,7 +1441,7 @@ public:
   // Second returned value is first valid position (i.e., upper_bound of key).
   // If there are duplicate keys, the insert position will be to the right of
   // all existing keys of the same value.
-  std::pair<int, int> find_insert_position(const T& key) {
+  std::pair<int, int> find_insert_position(const T &key) {
     int predicted_pos = predict_position(key);  // first use model to get prediction
 
     // insert to the right of duplicate keys
@@ -1634,8 +1626,6 @@ public:
   // already-existing key.
   // -1 if no insertion.
   std::pair<int, int> insert(const T &key, const P &payload) {
-    auto &lstats = latency_stats_.back();
-
     // Periodically check for catastrophe
     if (num_inserts_ % 64 == 0 && catastrophic_cost()) {
       return {2, -1};
@@ -1649,25 +1639,19 @@ public:
       if (catastrophic_cost()) {
         return {2, -1};
       }
-      if (num_keys_ > max_slots_ * kMinDensity_) {
+      if (num_keys_ > max_slots_ * kMinDensity) {
         return {3, -1};
       }
 
       // Expand
-      auto expand_start_time = std::chrono::high_resolution_clock::now();
       bool keep_left = is_append_mostly_right();
       bool keep_right = is_append_mostly_left();
-      resize(kMinDensity_, false, keep_left, keep_right);
+      resize(kMinDensity, false, keep_left, keep_right);
       num_resizes_++;
-      auto expand_end_time = std::chrono::high_resolution_clock::now();
-      lstats.expand += std::chrono::duration_cast<std::chrono::nanoseconds>(expand_end_time - expand_start_time).count();
     }
 
     // Insert
-    auto find_key_start_time = std::chrono::high_resolution_clock::now();
     std::pair<int, int> positions = find_insert_position(key);
-    auto find_key_end_time = std::chrono::high_resolution_clock::now();
-    lstats.find_key += std::chrono::duration_cast<std::chrono::nanoseconds>(find_key_end_time - find_key_start_time).count();
 
     int upper_bound_pos = positions.second;
     if (!allow_duplicates && upper_bound_pos > 0 && key_equal(ALEX_DATA_NODE_KEY_AT(upper_bound_pos - 1), key)) {
@@ -1676,8 +1660,6 @@ public:
     int insertion_position = positions.first;
     if (insertion_position < data_capacity_ && !check_exists(insertion_position)) {
       insert_element_at(key, payload, insertion_position);
-      auto insert_key_end_time = std::chrono::high_resolution_clock::now();
-      lstats.insert_key += std::chrono::duration_cast<std::chrono::nanoseconds>(insert_key_end_time - find_key_end_time).count();
     } else {
       insertion_position = insert_using_shifts(key, payload, insertion_position);
     }
@@ -1717,15 +1699,12 @@ public:
     if (num_keys_ < 50 || force_retrain) {
       const_iterator_type it(this, 0);
       LinearModelBuilder<T> builder(&(this->model_));
-      auto &lstats = latency_stats_.back();
       auto retrain_start_time = std::chrono::high_resolution_clock::now();
 
       for (int i = 0; it.cur_idx_ < data_capacity_ && !it.is_end(); it++, i++) {
         builder.add(it.key(), i);
       }
       builder.build();
-      auto retrain_end_time = std::chrono::high_resolution_clock::now();
-      lstats.retrain += std::chrono::duration_cast<std::chrono::nanoseconds>(retrain_end_time - retrain_start_time).count();
 
       if (keep_left) {
         this->model_.expand(static_cast<double>(data_capacity_) / num_keys_);
@@ -1820,8 +1799,8 @@ public:
     data_slots_ = new_data_slots;
 #endif
     bitmap_ = new_bitmap;
-    expansion_threshold_ = std::min(std::max(data_capacity_ * kMaxDensity_, static_cast<double>(num_keys_ + 1)), static_cast<double>(data_capacity_));
-    contraction_threshold_ = data_capacity_ * kMinDensity_;
+    expansion_threshold_ = std::min(std::max(data_capacity_ * kMaxDensity, static_cast<double>(num_keys_ + 1)), static_cast<double>(data_capacity_));
+    contraction_threshold_ = data_capacity_ * kMinDensity;
   }
 
   inline bool is_append_mostly_right() const {
@@ -1853,9 +1832,6 @@ public:
   // Insert key into pos, shifting as necessary in the range [left, right)
   // Returns the actual position of insertion
   int insert_using_shifts(const T &key, P payload, int pos) {
-    auto &lstats = latency_stats_.back();
-    auto shift_start_time = std::chrono::high_resolution_clock::now();
-
     // Find the closest gap
     int gap_pos = closest_gap(pos);
     set_bit(gap_pos);
@@ -1870,12 +1846,7 @@ public:
 #endif
       }
 
-      auto shift_end_time = std::chrono::high_resolution_clock::now();
-      lstats.shift += std::chrono::duration_cast<std::chrono::nanoseconds>(shift_end_time - shift_start_time).count();
-
       insert_element_at(key, payload, pos);
-      auto insert_end_time = std::chrono::high_resolution_clock::now();
-      lstats.insert_key += std::chrono::duration_cast<std::chrono::nanoseconds>(insert_end_time - shift_end_time).count();
 
       num_shifts_ += gap_pos - pos;
       return pos;
@@ -1889,12 +1860,7 @@ public:
 #endif
       }
 
-      auto shift_end_time = std::chrono::high_resolution_clock::now();
-      lstats.shift += std::chrono::duration_cast<std::chrono::nanoseconds>(shift_end_time - shift_start_time).count();
-
       insert_element_at(key, payload, pos - 1);
-      auto insert_end_time = std::chrono::high_resolution_clock::now();
-      lstats.insert_key += std::chrono::duration_cast<std::chrono::nanoseconds>(insert_end_time - shift_end_time).count();
 
       num_shifts_ += pos - gap_pos - 1;
       return pos - 1;
@@ -1908,10 +1874,11 @@ public:
     pos = std::min(pos, data_capacity_ - 1);
     int bitmap_pos = pos >> 6;
     int bit_pos = pos - (bitmap_pos << 6);
+
     if (bitmap_[bitmap_pos] == static_cast<uint64_t>(-1) ||
-        (bitmap_pos == bitmap_size_ - 1 &&
-         _mm_popcnt_u64(bitmap_[bitmap_pos]) ==
-             data_capacity_ - ((bitmap_size_ - 1) << 6))) {
+      (bitmap_pos == bitmap_size_ - 1 &&
+        _mm_popcnt_u64(bitmap_[bitmap_pos]) ==
+          data_capacity_ - ((bitmap_size_ - 1) << 6))) {
       // no gaps in this block of 64 positions, start searching in adjacent
       // blocks
       int left_bitmap_pos = 0;
@@ -1920,9 +1887,11 @@ public:
       int max_right_bitmap_offset = right_bitmap_pos - bitmap_pos;
       int max_bidirectional_bitmap_offset = std::min<int>(max_left_bitmap_offset, max_right_bitmap_offset);
       int bitmap_distance = 1;
+
       while (bitmap_distance <= max_bidirectional_bitmap_offset) {
         uint64_t left_bitmap_data = bitmap_[bitmap_pos - bitmap_distance];
         uint64_t right_bitmap_data = bitmap_[bitmap_pos + bitmap_distance];
+
         if (left_bitmap_data != static_cast<uint64_t>(-1) &&
             right_bitmap_data != static_cast<uint64_t>(-1)) {
           int left_gap_pos = ((bitmap_pos - bitmap_distance + 1) << 6) -
@@ -1975,6 +1944,7 @@ public:
         }
         bitmap_distance++;
       }
+
       if (max_left_bitmap_offset > max_right_bitmap_offset) {
         for (int i = bitmap_pos - bitmap_distance; i >= left_bitmap_pos; i--) {
           if (bitmap_[i] != static_cast<uint64_t>(-1)) {
@@ -2006,6 +1976,7 @@ public:
       // For example, if pos is 3, then bitmap '10101101' -> bitmap_right_gaps
       // '01010000'
       uint64_t bitmap_right_gaps = ~(bitmap_data | ((1ULL << bit_pos) - 1));
+
       if (bitmap_right_gaps != 0) {
         closest_right_gap_distance = static_cast<int>(_tzcnt_u64(bitmap_right_gaps)) - bit_pos;
       } else if (bitmap_pos + 1 < bitmap_size_) {
@@ -2096,7 +2067,7 @@ public:
 
     num_keys_--;
     if (num_keys_ < contraction_threshold_) {
-      resize(kMaxDensity_);  // contract
+      resize(kMaxDensity);  // contract
       num_resizes_++;
     }
   }
@@ -2127,7 +2098,7 @@ public:
 
     num_keys_ -= num_erased;
     if (num_keys_ < contraction_threshold_) {
-      resize(kMaxDensity_);  // contract
+      resize(kMaxDensity);  // contract
       num_resizes_++;
     }
     return num_erased;
@@ -2163,7 +2134,7 @@ public:
 
     num_keys_ -= num_erased;
     if (num_keys_ < contraction_threshold_) {
-      resize(kMaxDensity_);  // contract
+      resize(kMaxDensity);  // contract
       num_resizes_++;
     }
     return num_erased;
