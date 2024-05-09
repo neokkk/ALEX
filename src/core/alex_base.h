@@ -185,7 +185,7 @@ inline int get_offset(int word_id, uint64_t bit) {
 
 /*** Resizing densities ***/
 
-double kInitDensity = 0.7; // density of data nodes after bulk loading
+double kInitDensity = 1; // density of data nodes after bulk loading
 double kMinDensity = 0.6; // density after expanding, also
                           // determines the contraction threshold
 double kMaxDensity = 0.8; // density after contracting,
@@ -213,21 +213,6 @@ struct SampleDataNodeStats {
   double log2_sample_size = 0;
   double num_search_iterations = 0;
   double log2_num_shifts = 0;
-};
-
-struct LatencyStats {
-  unsigned int id;
-  double find_key = 0; // lookup
-  double insert_key = 0; // pure insert
-  double find_cost = 0;
-  double expand = 0;
-  double retrain = 0;
-  double split = 0;
-  double stat = 0;
-  double shift = 0;
-  double total = 0;
-
-  explicit LatencyStats(unsigned int id) : id(id) {}
 };
 
 // Accumulates stats that are used in the cost model, based on the actual vs
@@ -289,8 +274,7 @@ public:
     if (count_ == 0) return 0;
     // first need to accumulate statistics for current packed region
     long long dense_region_length = last_position_ - dense_region_start_idx_ + 1;
-    long long cur_num_expected_shifts =
-        num_expected_shifts_ + (dense_region_length * dense_region_length) / 4;
+    long long cur_num_expected_shifts = num_expected_shifts_ + (dense_region_length * dense_region_length) / 4;
     return cur_num_expected_shifts / static_cast<double>(count_);
   }
 
@@ -310,9 +294,11 @@ public:
 };
 
 // Combines ExpectedSearchIterationsAccumulator and ExpectedShiftsAccumulator
+// Get expecte exponential search count
 class ExpectedIterationsAndShiftsAccumulator : public StatAccumulator {
 public:
   ExpectedIterationsAndShiftsAccumulator() = default;
+
   explicit ExpectedIterationsAndShiftsAccumulator(int data_capacity)
     : data_capacity_(data_capacity) {}
 

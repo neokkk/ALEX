@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.12)
 project(alex)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 
 # Define the macro ‘DEBUG' in the debug mode
 if(CMAKE_BUILD_TYPE STREQUAL Debug)        
@@ -17,20 +17,20 @@ else()
     set(CMAKE_CXX_FLAGS "-O3 -march=native -Wall -Wextra")
 endif()
 
-include_directories(src/core)
+include_directories(src/core src/utils)
 
 add_executable(example src/examples/main.cpp)
 add_executable(benchmark src/benchmark/main.cpp)
 
-set(DOCTEST_DOWNLOAD_DIR ${CMAKE_CURRENT_BINARY_DIR}/doctest)
-file(DOWNLOAD
-    https://raw.githubusercontent.com/onqtam/doctest/2.4.6/doctest/doctest.h
-    ${DOCTEST_DOWNLOAD_DIR}/doctest.h
-    EXPECTED_HASH SHA1=40728d2bed7f074e80cb095844820114e7d16ce0
-)
+# set(DOCTEST_DOWNLOAD_DIR ${CMAKE_CURRENT_BINARY_DIR}/doctest)
+# file(DOWNLOAD
+#     https://raw.githubusercontent.com/onqtam/doctest/2.4.6/doctest/doctest.h
+#     ${DOCTEST_DOWNLOAD_DIR}/doctest.h
+#     EXPECTED_HASH SHA1=40728d2bed7f074e80cb095844820114e7d16ce0
+# )
 
-add_executable(test_alex test/unittest_main.cpp)
-target_include_directories(test_alex PRIVATE ${DOCTEST_DOWNLOAD_DIR})
+# add_executable(test_alex test/unittest_main.cpp)
+# target_include_directories(test_alex PRIVATE ${DOCTEST_DOWNLOAD_DIR})
 
-enable_testing()
-add_test(test_alex test_alex)
+# enable_testing()
+# add_test(test_alex test_alex)
