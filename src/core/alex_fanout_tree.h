@@ -67,36 +67,33 @@ static double merge_nodes_upwards(
     double best_cost,
     int num_keys,
     int total_keys,
-    std::vector<std::vector<FTNode>>& fanout_tree) {
+    std::vector<std::vector<FTNode>> &fanout_tree) {
   for (int level = start_level; level >= 1; level--) {
     int level_fanout = 1 << level;
     bool at_least_one_merge = false;
 
     for (int i = 0; i < level_fanout / 2; i++) {
-      if (fanout_tree[level][2 * i].use && fanout_tree[level][2 * i + 1].use) {
-        int num_node_keys = fanout_tree[level - 1][i].num_keys;
+      if (fanout_tree[level][2 * i].use && fanout_tree[level][2 * i + 1].use) { /// best level이면
+        int num_node_keys = fanout_tree[level - 1][i].num_keys; /// parent node의 key 수
 
         if (num_node_keys == 0) {
           fanout_tree[level][2 * i].use = false;
           fanout_tree[level][2 * i + 1].use = false;
           fanout_tree[level - 1][i].use = true;
           at_least_one_merge = true;
-          best_cost -= kModelSizeWeight * sizeof(AlexDataNode<T, P>) *
-                       total_keys / num_keys;
+          best_cost -= kModelSizeWeight * sizeof(AlexDataNode<T, P>) * total_keys / num_keys;
           continue;
         }
 
         int num_left_keys = fanout_tree[level][2 * i].num_keys;
         int num_right_keys = fanout_tree[level][2 * i + 1].num_keys;
-        double merging_cost_saving =
-            (fanout_tree[level][2 * i].cost * num_left_keys / num_node_keys) +
-            (fanout_tree[level][2 * i + 1].cost * num_right_keys /
-             num_node_keys) -
-            fanout_tree[level - 1][i].cost +
-            (kModelSizeWeight * sizeof(AlexDataNode<T, P>) * total_keys /
-             num_node_keys);
+        double merging_cost_saving = /// merge로 줄어드는 cost
+          (fanout_tree[level][2 * i].cost * num_left_keys / num_node_keys) +
+          (fanout_tree[level][2 * i + 1].cost * num_right_keys / num_node_keys) -
+          fanout_tree[level - 1][i].cost +
+          (kModelSizeWeight * sizeof(AlexDataNode<T, P>) * total_keys / num_node_keys);
 
-        if (merging_cost_saving >= 0) {
+        if (merging_cost_saving >= 0) { ///
           fanout_tree[level][2 * i].use = false;
           fanout_tree[level][2 * i + 1].use = false;
           fanout_tree[level - 1][i].use = true;
@@ -137,7 +134,7 @@ double compute_level(const std::pair<T, P> values[], int num_keys,
 
   for (int i = 0; i < fanout; i++) {
     left_boundary = right_boundary;
-    right_boundary =
+    right_boundary = /// last node may have more keys
       i == fanout - 1
         ? num_keys
         : static_cast<int>(
@@ -152,9 +149,8 @@ double compute_level(const std::pair<T, P> values[], int num_keys,
       right_boundary++;
     }
 
-    if (left_boundary == right_boundary) {
-      used_fanout_tree_nodes.push_back(
-          {level, i, 0, left_boundary, right_boundary, false, 0, 0, 0, 0, 0});
+    if (left_boundary == right_boundary) { /// no keys in this node
+      used_fanout_tree_nodes.push_back({level, i, 0, left_boundary, right_boundary, false, 0, 0, 0, 0, 0});
       continue;
     }
 
@@ -226,7 +222,7 @@ std::pair<int, double> find_best_fanout_bottom_up(
 
     if (fanout_costs.size() >= 3 &&
       fanout_costs[fanout_costs.size() - 1] > fanout_costs[fanout_costs.size() - 2] &&
-      fanout_costs[fanout_costs.size() - 2] > fanout_costs[fanout_costs.size() - 3]) {
+      fanout_costs[fanout_costs.size() - 2] > fanout_costs[fanout_costs.size() - 3]) { /// cost is increasing
       break;
     }
 
@@ -420,11 +416,7 @@ find_best_fanout_existing_node(const AlexModelNode<T, P> *parent,
       typename AlexDataNode<T, P>::const_iterator_type it(node, left_boundary);
       LinearModelBuilder<T> builder(&model);
 
-      for (int j = 0; it.cur_idx_ < right_boundary && !it.is_end(); it++, j++) {
-        builder.add(it.key(), j);
-        num_actual_keys++;
-      }
-      builder.build();
+      node->build_new(builder, it, 0, right_boundary);
 
       double empirical_insert_frac = node->frac_inserts();
       DataNodeStats stats;
@@ -443,19 +435,17 @@ find_best_fanout_existing_node(const AlexModelNode<T, P> *parent,
 
     // model weight reflects that it has global effect, not local effect
     double traversal_cost =
-        kNodeLookupsWeight +
-        (kModelSizeWeight * fanout *
-         (sizeof(AlexDataNode<T, P>) + sizeof(void *)) * total_keys / num_keys);
+      kNodeLookupsWeight +
+      (kModelSizeWeight * fanout *
+        (sizeof(AlexDataNode<T, P>) + sizeof(void *)) * total_keys / num_keys);
 
     cost += traversal_cost;
     fanout_costs.push_back(cost);
 
     // stop after expanding fanout increases cost twice in a row
     if (fanout_costs.size() >= 3 &&
-        fanout_costs[fanout_costs.size() - 1] >
-            fanout_costs[fanout_costs.size() - 2] &&
-        fanout_costs[fanout_costs.size() - 2] >
-            fanout_costs[fanout_costs.size() - 3]) {
+      fanout_costs[fanout_costs.size() - 1] > fanout_costs[fanout_costs.size() - 2] &&
+      fanout_costs[fanout_costs.size() - 2] > fanout_costs[fanout_costs.size() - 3]) {
       break;
     }
 

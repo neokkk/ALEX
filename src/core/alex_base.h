@@ -186,9 +186,9 @@ inline int get_offset(int word_id, uint64_t bit) {
 /*** Resizing densities ***/
 
 double kInitDensity = 1; // density of data nodes after bulk loading
-double kMinDensity = 0.6; // density after expanding, also
+double kMinDensity = 1; // density after expanding, also
                           // determines the contraction threshold
-double kMaxDensity = 0.8; // density after contracting,
+double kMaxDensity = 1; // density after contracting,
                           // also determines the expansion threshold
 
 /*** Cost model weights ***/

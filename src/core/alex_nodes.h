@@ -387,12 +387,12 @@ public:
 
     uint64_t *delete_bitmap_ = nullptr;
 
-    uint8_t count = 0; /// number of keys in key/data_slots
+    order_t count = 0; /// number of keys in key/data_slots
     order_t min_idx = 0; /// index of the minimum key in key/data_slots
                          /// start point for sorted lookups
     order_t max_idx = 0; /// index of the maximum key in key/data_slots
                          /// end point for sorted lookups
-    uint8_t current_collision_factor = 2; /// 2, 3, 4 (4, 8, 16)
+    uint8_t current_collision_factor = 2; /// 2, 3, 4
   
     static constexpr uint8_t kMaxCollisionFactor = 4;
 
@@ -405,6 +405,7 @@ public:
       key_slots_[0] = key;
       payload_slots_[0] = payload;
       order_slots_[0] = -1;
+      count++;
     }
 
     virtual ~AlexDataBuffer() {
@@ -423,7 +424,8 @@ public:
       value_allocator().deallocate(data_slots_, size);
     #endif
       order_allocator().deallocate(order_slots_, size);
-      node_->bitmap_allocator().deallocate(delete_bitmap_, size);
+      auto bitmap_size = static_cast<size_t>(std::ceil(size / 64.));
+      node_->bitmap_allocator().deallocate(delete_bitmap_, bitmap_size);
     }
 
 private:
@@ -437,7 +439,9 @@ private:
       data_slots_ = new (value_allocator().allocate(size)) V[size];
     #endif
       order_slots_ = new (order_allocator().allocate(size)) order_t[size](); /// initialize to 0
-      delete_bitmap_ = new (node_->bitmap_allocator().allocate(size)) uint64_t[size]();
+
+      auto bitmap_size = static_cast<size_t>(std::ceil(size / 64.));
+      delete_bitmap_ = new (node_->bitmap_allocator().allocate(bitmap_size)) uint64_t[bitmap_size]();
     }
 
     /*** Allocators ***/
@@ -536,7 +540,7 @@ public:
       return false;
     }
 
-    int num_keys_in_range(int left, int right) const {
+    int num_keys_in_range(const T &left, const T &right) const {
       int num_keys = 0;
       int start_pos = find_lower_bound(left);
       start_pos = key_slots_[start_pos] == left ? start_pos : start_pos + 1; /// greater equal than left
@@ -552,7 +556,7 @@ public:
       return num_keys;
     }
 
-    size_t size() {
+    order_t size() {
       return count;
     }
 
@@ -574,37 +578,45 @@ public:
       return nullptr;
     }
 
-    bool append(T key, P payload) {
+    bool append(const T &key, const P &payload) {
       if (is_full()) {
+        std::cout << "is full" << std::endl;
         bool result = expand();
         if (!result) { /// full
           return false;
         }
       }
 
-      int pos = size();
+      auto pos = size();
+      printf("pos: %d\n", pos);
       key_slots_[pos] = key;
       payload_slots_[pos] = payload;
 
       /*** Update order ***/
 
+      printf("input key: %d, min key: %d, max key: %d\n", key, key_slots_[min_idx], key_slots_[max_idx]);
+      printf("min_idx: %d, max_idx: %d\n", min_idx, max_idx);
+
       if (node_->key_less(key, key_slots_[min_idx])) {
+        std::cout << "key is less than min" << std::endl;
         order_slots_[pos] = min_idx;
         min_idx = pos;
       } else if (node_->key_less(key_slots_[max_idx], key)) {
+        std::cout << "key is greater than max" << std::endl;
         order_slots_[max_idx] = pos;
         max_idx = pos;
         order_slots_[pos] = -1; /// update max to -1
       } else { /// TODO: concurrent control
+        std::cout << "key is in the middle" << std::endl;
         auto order_idx = find_last_no_greater_than(key);
         order_slots_[pos] = order_slots_[order_idx];
         order_slots_[order_idx] = pos;
       }
 
-      for (int i = 0; i < size(); i++) {
-        std::cout << order_slots_[i] << " ";
+      for (int i = 0; i <= size(); i++) {
+        printf("%d ", i, order_slots_[i]);
       }
-      std::cout << std::endl;
+      printf("\n");
 
       count++;
 
@@ -627,8 +639,12 @@ public:
       /// find the keys that is less than or equal to the input key
     }
 
+    /**
+     * when expand, deleted keys will be removed
+    */
     bool expand() {
       if (is_totally_full()) {
+        std::cout << "is totally full" << std::endl;
         return false;
       }
 
@@ -636,33 +652,47 @@ public:
       current_collision_factor++;
       auto size = 1 << current_collision_factor;
 
-    #if ALEX_DATA_NODE_SEP_ARRAYS
-      auto new_key_slots_ = key_allocator().allocate(size);
-      std::copy(key_slots_, key_slots_ + size, new_key_slots_);
-      key_allocator().deallocate(key_slots_, prev_size);
-      key_slots_ = new_key_slots_;
+      std::cout << "buffer expanded to " << size << std::endl;
 
-      auto new_payload_slots_ = payload_allocator().allocate(size);
-      std::copy(payload_slots_, payload_slots_ + size, new_payload_slots_);
-      payload_allocator().deallocate(key_slots_, prev_size);
-      payload_slots_ = new_payload_slots_;
+    #if ALEX_DATA_NODE_SEP_ARRAYS
+      auto new_key_slots = new (key_allocator().allocate(size)) T[size];
+      memcpy(new_key_slots, key_slots_, prev_size * sizeof(T));
+      key_allocator().deallocate(key_slots_, prev_size);
+      key_slots_ = new_key_slots;
+
+      auto new_payload_slots = new (payload_allocator().allocate(size)) P[size];
+      memcpy(new_payload_slots, payload_slots_, prev_size * sizeof(P));
+      payload_allocator().deallocate(payload_slots_, prev_size);
+      payload_slots_ = new_payload_slots;
     #else
-      auto new_data_slots_ = value_allocator().allocate(size);
-      std::copy(data_slots_, data_slots_ + size, new_data_slots_);
+      auto new_data_slots = new (value_allocator().allocate(size)) V[size];
+      memcpy(new_data_slots, data_slots_, prev_size * sizeof(V));
       value_allocator().deallocate(data_slots_, prev_size);
-      data_slots_ = new_data_slots_;
+      data_slots_ = new_data_slots;
     #endif
 
-      auto new_order_slots = order_allocator().allocate(size);
-      std::copy(order_slots_, order_slots_ + size, new_order_slots);
+      auto new_order_slots = new (order_allocator().allocate(size)) order_t[size]();
+      memcpy(new_order_slots, order_slots_, prev_size * sizeof(order_t));
       order_allocator().deallocate(order_slots_, prev_size);
       order_slots_ = new_order_slots;
+
+      auto bitmap_size = static_cast<size_t>(std::ceil(size / 64.));
+      auto new_delete_bitmap = new (node_->bitmap_allocator().allocate(bitmap_size)) uint64_t[bitmap_size]();
+      memset(new_delete_bitmap, 0, bitmap_size);
+      node_->bitmap_allocator().deallocate(delete_bitmap_, bitmap_size);
+      delete_bitmap_ = new_delete_bitmap;
 
       return true;
     }
 
-    const double utilization() {
+    double utilization() {
       return count / (1 << current_collision_factor);
+    }
+
+    void print() {
+      for (int i = 0; i < count; i++) {
+        std::cout << key_slots_[i] << " ";
+      }
     }
   };
 
@@ -752,11 +782,6 @@ public:
     bitmap_[bitmap_pos] &= ~(1ULL << bit_pos);
   }
 
-  T get_key(int pos) {
-    int position = predict_position(pos);
-
-  }
-
   // Value of first (i.e., min) key
   T first_key() const {
     for (int i = 0; i < data_capacity_; i++) {
@@ -796,23 +821,13 @@ public:
   int num_keys_in_range(int left, int right) const {
     assert(left >= 0 && left <= right && right <= data_capacity_);
     int num_keys = 0;
-    int left_pos = predict_position(left);
-    int right_pos = predict_position(right);
-    auto left_buffer = buffer_[left_pos];
-    auto right_buffer = buffer_[right_pos];
-
-    if (left_buffer == right_buffer) {
-      return left_buffer->num_keys_in_range(left, right);
+    int left_bitmap_idx = left >> 6;
+    int right_bitmap_idx = right >> 6;
+    
+    for (int i = left_bitmap_idx; i <= right_bitmap_idx; i = get_next_filled_buffer(i, true)) {
+      num_keys += buffer_[i]->size();
     }
-
-    num_keys += left_buffer->num_keys_in_range(left, left_buffer->size() - 1);
-    while (left_buffer != right_buffer) {
-      int next_buffer_pos = get_next_filled_buffer(left_pos, true);
-      left_buffer = buffer_[next_buffer_pos];
-      num_keys += left_buffer->size();
-    }
-    num_keys += right_buffer->num_keys_in_range(0, right);
-
+    
     return num_keys;
   }
 
@@ -846,7 +861,7 @@ public:
     return !key_less_(a, b) && !key_less_(b, a);
   }
 
-  const double mean_utilization() {
+  double mean_utilization() {
     int i = 0;
     double total_utilization = 0;
 
@@ -1394,7 +1409,7 @@ public:
   // Initalize key/payload/bitmap arrays and relevant metadata
   void initialize(int num_keys, double density) {
     num_keys_ = num_keys;
-    data_capacity_ = std::max(static_cast<int>(num_keys / density), num_keys + 1);
+    data_capacity_ = std::max(static_cast<int>(num_keys / density), num_keys);
     bitmap_size_ = static_cast<size_t>(std::ceil(data_capacity_ / 64.));
     bitmap_ = new (bitmap_allocator().allocate(bitmap_size_)) uint64_t[bitmap_size_]();  // initialize to all false
     buffer_ = new (buffer_allocator().allocate(data_capacity_)) AlexDataBuffer *[data_capacity_];
@@ -1438,12 +1453,13 @@ public:
       last_position = position;
     }
 
-    expansion_threshold_ = std::min(std::max(data_capacity_ * kMaxDensity,
-                                             static_cast<double>(num_keys + 1)),
+    expansion_threshold_ = std::min(std::max(data_capacity_ * kMaxDensity, static_cast<double>(num_keys + 1)),
                                     static_cast<double>(data_capacity_));
     contraction_threshold_ = data_capacity_ * kMinDensity;
     min_key_ = values[0].first;
     max_key_ = values[num_keys - 1].first;
+
+    print_buffer();
   }
 
   // Bulk load using the keys between the left and right positions in
@@ -1674,7 +1690,7 @@ public:
     return -1;
   }
 
-  int find_next_key(T key) {
+  int find_next_key(const T &key) {
     int position = predict_position(key);
     auto buf = buffer_[position];
 
@@ -1772,12 +1788,15 @@ public:
   std::pair<int, int> insert(const T &key, const P &payload) {
     // Insert
     int position = predict_position(key);
+    std::cout << "position: " << position << std::endl;
     if (position < data_capacity_) {
       if (check_exists(position)) {
         bool result = buffer_[position]->append(key, payload);
         if (!result) { /// try to insert into full buffer
           bool keep_left = is_append_mostly_right();
           bool keep_right = is_append_mostly_left();
+          std::cout << "keep_left: " << keep_left << ", keep_right: " << keep_right << std::endl;
+          
           result = resize(kMinDensity, true, keep_left, keep_right); /// retrain model
           if (!result) {
             return {3, position};
@@ -1786,6 +1805,7 @@ public:
           insert(key, payload); /// insert again
         }
       } else { /// first access at this position
+        std::cout << "first" << std::endl;
         buffer_[position] = new AlexDataBuffer(this, key, payload);
         set_bit(position);
       }
@@ -1831,7 +1851,8 @@ public:
       return false;
     }
 
-    int new_data_capacity = std::max(static_cast<int>(num_keys_ / target_density), num_keys_ + 1);
+    printf("resize\n");
+    int new_data_capacity = std::max(static_cast<int>(num_keys_ / target_density), num_keys_);
     auto new_bitmap_size = static_cast<size_t>(std::ceil(new_data_capacity / 64.));
     auto new_bitmap = new (bitmap_allocator().allocate(new_bitmap_size)) uint64_t[new_bitmap_size]();  // initialize to all false
     auto new_buffer = new (buffer_allocator().allocate(new_data_capacity)) AlexDataBuffer *[new_data_capacity];
@@ -1840,6 +1861,7 @@ public:
     if (num_keys_ < 50 || force_retrain) {
       const_iterator_type it(this, 0);
       LinearModelBuilder<T> builder(&(this->model_));
+
       build_new(builder, it, 0, data_capacity_);
 
       if (keep_left) {
@@ -1871,7 +1893,12 @@ public:
         position = std::max<int>(position, last_position + 1);
 
         if (position < new_data_capacity) {
-          if (check_exists(position)) {
+          int new_bitmap_pos = position >> 6;
+          int new_bit_pos = position - (new_bitmap_pos << 6);
+          bool new_check_exists = new_bitmap[new_bitmap_pos] & (1ULL << new_bit_pos);
+
+          if (new_check_exists) {
+            auto payload = *(buf->get_payload(i));
             new_buffer[position]->append(keys[i], *(buf->get_payload(i)));
           } else {
             new_buffer[position] = new AlexDataBuffer(this, keys[i], *(buf->get_payload(i)));
@@ -1957,7 +1984,7 @@ public:
     num_keys_ -= num_erased;
 
     if (num_keys_ < contraction_threshold_) {
-      resize(kMaxDensity);  // contract
+      resize(kMaxDensity); // contract
       num_resizes_++;
     }
     return num_erased;
@@ -2046,6 +2073,16 @@ public:
            std::to_string(data_capacity_) + ", Expansion Threshold: " +
            std::to_string(expansion_threshold_) + "\n";
     return str;
+  }
+
+  void print_buffer() {
+    for (int i = 0; i < data_capacity_; i++) {
+      if (check_exists(i)) {
+        std::cout << "position: " << i << " => ";
+        buffer_[i]->print();
+        std::cout << std::endl;
+      }
+    }
   }
 };
 }

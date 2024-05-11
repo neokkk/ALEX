@@ -754,8 +754,10 @@ private:
                       int total_keys, const LinearModel<T> *data_node_model = nullptr) {
     // Automatically convert to data node when it is impossible to be better
     // than current cost
+    std::cout << "node cost: " << node->cost_ << ", slope: " << node->model_.a_ << ", intercept: " << node->model_.b_ << std::endl;
     if (num_keys <= derived_params_.max_data_node_slots * kInitDensity &&
       (node->cost_ < kNodeLookupsWeight || node->model_.a_ == 0)) {
+      std::cout << "bulk_load_node: convert to data node 1" << std::endl;
       stats_.num_data_nodes++;
       auto data_node = new (data_node_allocator().allocate(1)) data_node_type(node->level_, derived_params_.max_data_node_slots, key_less_, allocator_);
       data_node->bulk_load(values, num_keys, data_node_model, params_.approximate_model_computation);
@@ -785,9 +787,11 @@ private:
         params_.approximate_model_computation,
         params_.approximate_cost_computation, key_less_);
     }
-    
-    int best_fanout_tree_depth = best_fanout_stats.first;
-    double best_fanout_tree_cost = best_fanout_stats.second;
+
+    int best_fanout_tree_depth = best_fanout_stats.first; /// best level
+    double best_fanout_tree_cost = best_fanout_stats.second; /// best cost
+
+    std::cout << "best_fanout_tree_depth: " << best_fanout_tree_depth << ", best_fanout_tree_cost: " << best_fanout_tree_cost << std::endl;
 
     // Decide whether this node should be a model node or data node
     if (best_fanout_tree_cost < node->cost_ ||
@@ -802,8 +806,7 @@ private:
         // order to satisfy the max node size, so we compute the fanout that
         // would satisfy that condition
         // in expectation
-        best_fanout_tree_depth =
-          static_cast<int>(std::log2(static_cast<double>(num_keys) / derived_params_.max_data_node_slots)) + 1;
+        best_fanout_tree_depth = static_cast<int>(std::log2(static_cast<double>(num_keys) / derived_params_.max_data_node_slots)) + 1;
         used_fanout_tree_nodes.clear();
 
         int max_data_node_keys = static_cast<int>(derived_params_.max_data_node_slots * kInitDensity);
@@ -827,10 +830,12 @@ private:
         child_node->cost_ = tree_node.cost;
         child_node->duplication_factor_ = static_cast<uint8_t>(best_fanout_tree_depth - tree_node.level);
         int repeats = 1 << child_node->duplication_factor_;
+        std::cout << "FTNode(" << tree_node.node_id << ")" << repeats << std::endl;
         double left_value = static_cast<double>(cur) / fanout;
         double right_value = static_cast<double>(cur + repeats) / fanout;
         double left_boundary = (left_value - node->model_.b_) / node->model_.a_;
         double right_boundary = (right_value - node->model_.b_) / node->model_.a_;
+        std::cout << "reapeats: " << repeats << ", left_boundary: " << left_boundary << ", right_boundary: " << right_boundary << std::endl;
         child_node->model_.a_ = 1.0 / (right_boundary - left_boundary);
         child_node->model_.b_ = -child_node->model_.a_ * left_boundary;
         model_node->children_[cur] = child_node;
@@ -859,6 +864,7 @@ private:
       node = model_node;
     } else {
       // Convert to data node
+      std::cout << "bulk_load_node: convert to data node 2" << std::endl;
       stats_.num_data_nodes++;
       auto data_node = new (data_node_allocator().allocate(1)) data_node_type(node->level_, derived_params_.max_data_node_slots, key_less_, allocator_);
       data_node->bulk_load(values, num_keys, data_node_model, params_.approximate_model_computation);
@@ -942,11 +948,12 @@ public:
   P *get_payload(const T &key) const {
     stats_.num_lookups++;
     data_node_type *leaf = get_leaf(key);
-    int idx = leaf->find_key(key);
-    if (idx < 0) {
+    int position = leaf->predict_position(key);
+    int pos = leaf->find_key(key);
+    if (pos < 0) {
       return nullptr;
     } else {
-      return leaf->get_payload(idx);
+      return leaf->buffer_[position]->get_payload(pos);
     }
   }
 
@@ -1045,11 +1052,13 @@ public:
     if (key > istats_.key_domain_max_) {
       istats_.num_keys_above_key_domain++;
       if (should_expand_right()) {
+        std::cout << "expand root to the right" << std::endl;
         expand_root(key, false);  // expand to the right
       }
     } else if (key < istats_.key_domain_min_) {
       istats_.num_keys_below_key_domain++;
       if (should_expand_left()) {
+        std::cout << "expand root to the left" << std::endl;
         expand_root(key, true);  // expand to the left
       }
     }
@@ -1601,8 +1610,8 @@ private:
     int right_boundary = old_node->predict_position((mid_bucketID - parent->model_.b_) / parent->model_.a_);
     // Account for off-by-one errors due to floating-point precision issues.
     while (right_boundary < old_node->data_capacity_ &&
-           old_node->get_key(right_boundary) != std::numeric_limits<T>::max() &&
-           parent->model_.predict(old_node->get_key(right_boundary)) < mid_bucketID) {
+           old_node->buffer_[right_boundary]->get_max_key() != std::numeric_limits<T>::max() &&
+           parent->model_.predict(old_node->buffer_[right_boundary]->get_max_key()) < mid_bucketID) {
       right_boundary = std::min(
         old_node->get_next_filled_buffer(right_boundary, false) + 1,
         old_node->data_capacity_);
@@ -1676,8 +1685,8 @@ private:
       num_reassigned_keys = 0;
 
       while (right_boundary < old_node->data_capacity_ &&
-             old_node->get_key(right_boundary) != std::numeric_limits<T>::max() &&
-             parent->model_.predict(old_node->get_key(right_boundary)) < cur + child_node_repeats) {
+             old_node->buffer_[right_boundary]->get_max_key() != std::numeric_limits<T>::max() &&
+             parent->model_.predict(old_node->buffer_[right_boundary]->get_max_key()) < cur + child_node_repeats) {
         num_reassigned_keys++;
         right_boundary = std::min(
           old_node->get_next_filled_buffer(right_boundary, false) + 1,
