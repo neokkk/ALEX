@@ -55,6 +55,7 @@ template <class T, class P, class Compare = AlexCompare,
 class Alex {
   static_assert(std::is_arithmetic<T>::value, "ALEX key type must be numeric.");
   static_assert(std::is_same<Compare, AlexCompare>::value, "Must use AlexCompare.");
+  // static_assert(alignof(T) % 64 == 0, "Key type must be 64-byte aligned.");
 
 public:
   // Value type, returned by dereferencing an iterator
@@ -2069,6 +2070,7 @@ public:
     data_node_type *leaf = get_leaf(key);
     int num_erased = leaf->erase(key);
     stats_.num_keys -= num_erased;
+
     if (leaf->num_keys_ == 0) {
       merge(leaf, key);
     }

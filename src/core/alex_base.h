@@ -14,9 +14,11 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <new>
 #include <random>
 #include <set>
 #include <string>
@@ -183,6 +185,8 @@ inline int get_offset(int word_id, uint64_t bit) {
   return (word_id << 6) + count_ones(bit - 1);
 }
 
+static const uint8_t byte = 8;
+
 /*** Resizing densities ***/
 
 double kInitDensity = 1; // density of data nodes after bulk loading
@@ -348,6 +352,65 @@ public:
   int count_ = 0;
   int data_capacity_ = -1;  // capacity of node
 };
+
+/*** AlignedAllocator ***/
+
+
+template <typename T, std::size_t Alignment>
+class AlignedAllocator : public std::allocator<T> {
+public:
+  using size_type = size_t;
+  using pointer_type = T *;
+  using const_pointer_type = const T *;
+
+  template <typename U>
+  struct rebind {
+    typedef AlignedAllocator<U, Alignment> other;
+  };
+
+  AlignedAllocator() noexcept {}
+
+  template <typename U>
+  AlignedAllocator(const AlignedAllocator<U, Alignment> &) noexcept {}
+
+  pointer_type allocate(size_type n, const void *hint = 0) {
+    if (auto p = static_cast<pointer_type>(std::aligned_alloc(Alignment, n * sizeof(T)))) {
+      return p;
+    }
+    throw std::bad_alloc();
+  }
+
+  void deallocate(pointer_type p, size_type n) {
+    std::free(p);
+  }
+};
+
+template <typename T>
+T reverse_bits(T num) {
+  // static_assert(std::is_unsigned<T>::value, "Reverse bits function requires an unsigned integer type.");
+
+  T reversed = 0;
+  int bit_count = sizeof(T) * 8;
+
+  for (int i = 0; i < bit_count; ++i) {
+    reversed = (reversed << 1) | (num & 1);
+    num >>= 1;
+  }
+
+  return reversed;
+}
+
+/*** SIMD ***/
+
+int64_t reduce_min_exclude_zero_SIMD(__m512i &vec) {
+  const __m512i zero = _mm512_setzero_si512();
+  __mmask8 mask = _mm512_cmpgt_epi64_mask(vec, zero); /// mask for greater than zero
+  if (!mask) return std::numeric_limits<int64_t>::max(); /// if all elements are less equal than zero
+
+  __m512i max_val_vec = _mm512_set1_epi64(std::numeric_limits<int64_t>::max());
+  __m512i min_vec = _mm512_mask_blend_epi64(mask, max_val_vec, vec);
+  return _mm512_reduce_min_epi64(min_vec);
+}
 
 /*** Miscellaneous helpers ***/
 
