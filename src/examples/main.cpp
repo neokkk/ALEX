@@ -36,9 +36,9 @@ int main(int, char **) {
   }
 
   // Erase the keys [0, 10). Now there are 190 keys.
-  // for (int i = 0; i < 10; i++) {
-  //   index.erase(i);
-  // }
+  for (int i = 0; i < 10; i++) {
+    int result = index.erase(i);
+  }
 
   // Iterate through all entries in the index and update their payload if the
   // key is even
@@ -55,11 +55,11 @@ int main(int, char **) {
   // }
 
   // // Insert 9 more keys with value 42. Now there are 199 keys.
-  // for (int i = 0; i < 9; i++) {
-  //   KEY_TYPE new_key = 42;
-  //   PAYLOAD_TYPE new_payload = dis(gen);
-  //   index.insert(new_key, new_payload);
-  // }
+  for (int i = 0; i < 9; i++) {
+    KEY_TYPE new_key = 42;
+    PAYLOAD_TYPE new_payload = dis(gen);
+    index.insert(new_key, new_payload);
+  }
 
   // Look at some stats
   auto stats = index.get_stats();

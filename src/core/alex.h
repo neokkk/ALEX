@@ -1066,6 +1066,11 @@ public:
 
     data_node_type *leaf = get_leaf(key);
 
+    if (leaf->key_exists(key)) {
+      // Duplicate found and duplicates not allowed
+      return {Iterator(leaf, leaf->find_key(key)), false};
+    }
+
     // Nonzero fail flag means that the insert did not happen
     std::pair<int, int> ret = leaf->insert(key, payload);
     int fail = ret.first;
@@ -2399,7 +2404,7 @@ public:
       initialize();
     }
 
-    Iterator& operator=(const Iterator &other) {
+    Iterator &operator=(const Iterator &other) {
       if (this != &other) {
         cur_idx_ = other.cur_idx_;
         cur_leaf_ = other.cur_leaf_;
@@ -2438,11 +2443,11 @@ public:
 
     bool is_end() const { return cur_leaf_ == nullptr; }
 
-    bool operator==(const Iterator& rhs) const {
+    bool operator==(const Iterator &rhs) const {
       return cur_idx_ == rhs.cur_idx_ && cur_leaf_ == rhs.cur_leaf_;
     }
 
-    bool operator!=(const Iterator& rhs) const { return !(*this == rhs); };
+    bool operator!=(const Iterator &rhs) const { return !(*this == rhs); };
 
   private:
     void initialize() {

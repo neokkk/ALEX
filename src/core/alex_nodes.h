@@ -533,20 +533,6 @@ public:
       );
     }
 
-    bool key_exists(T key) {
-      if (count == 0 || key_less(key, key_slots_[min_idx]) || key_less(key_slots_[max_idx], key)) {
-        return false;
-      }
-
-      for (int i = 0; i < count; i++) { /// TODO: SIMD
-        if (key_equal(key, key_slots_[i])) {
-          return true;
-        }
-      }
-
-      return false;
-    }
-
     int num_keys_in_range(const T &left, const T &right) const {
       int num_keys = 0;
       int start_pos = find_lower_bound(left);
@@ -571,42 +557,62 @@ public:
       return 1 << current_collision_factor;
     }
 
-    P *lookup(T key) {
+    int find_idx(T key) {
+      int size = 1 << current_collision_factor;
+
       if (count == 0 ||
-        key_less(key, key_slots_[min_idx]) ||
-        key_less(key_slots_[max_idx], key)) {
-        return nullptr;
+        node_->key_less(key, key_slots_[min_idx]) ||
+        node_->key_less(key_slots_[max_idx], key)) {
+        return -1;
       }
 
     #ifdef __AVX512F__
-      const int vec_size = 512 / sizeof(T);
+      std::cout << "simd lookup" << std::endl;
+      const int unit_count = 512 / (sizeof(T) * byte);
+      const int vec_size = size / unit_count;
       int i = 0;
-      __m512i vkey = _mm512_set1_epi64(key);  /// Broadcast key to all elements of the vector
+      __m512i vkey = _mm512_set1_epi64(key);
 
-      for (; i <= count - vec_size; i += vec_size) {
-        __m512i vkeys = _mm512_loadu_epi64(&key_slots_[i]);
+      for (; i < vec_size; i++) {
+        __m512i vkeys = _mm512_loadu_epi64(&key_slots_[i * unit_count]);
         __mmask16 mask = _mm512_cmpeq_epi64_mask(vkeys, vkey);
 
-        if (mask != 0) {  // If any keys match
-          int match_idx = _tzcnt_u64(mask) + i;  // Find the index of the first match
-          return &payload_slots_[match_idx];
+        if (mask != 0) { /// If any keys match
+          int match_key = _tzcnt_u64(mask) + i; /// Find the index of the first match
+          __m512i match_vec = _mm512_set1_epi64(match_key);
+          __mmask16 match_mask = _mm512_cmpeq_epi64_mask(vkeys, match_vec);
+          int match_idx = __tzcnt_u64(match_mask) + i * unit_count;
+          return match_idx;
         }
       }
 
-      // Handle remaining elements
-      for (; i < count; i++) {
-        if (key_equal(key, key_slots_[i])) {
-          return &payload_slots_[i];
+      /// Handle remaining elements
+      for (int j = i * unit_count; j < size; j++) {
+        if (node_->key_equal(key, key_slots_[j])) {
+          return j;
         }
       }
     #else
-      for (int i = 0; i < count; i++) { /// TODO: SIMD
-        if (key_equal(key, key_slots_[i])) {
-          return &(payload_slots_[i]);
+      for (int i = 0; i < count; i++) {
+        if (node_->key_equal(key, key_slots_[i])) {
+          return i;
         }
       }
-  #endif
-      return nullptr;
+    #endif
+      
+      return -1;
+    }
+
+    bool key_exists(T key) {
+      return find_idx(key) != -1;
+    }
+
+    P *lookup(T key) {
+      int idx = find_idx(key);
+      if (idx < 0) {
+        return nullptr;
+      }
+      return &payload_slots_[idx];
     }
 
     bool append(const T &key, const P &payload) {
@@ -683,17 +689,32 @@ public:
           }
         }
 
+        for (int i = vec_size * unit_count; i < size; i++) {
+          if (node_->key_less(key_slots_[i], key)) {
+            max_key = key_slots_[i];
+            max_idx = i;
+          }
+        }
+
         return max_idx;
       } else {
         std::vector<order_t> small_key_idxs;
+        printf("small_key_idxs(count: %d): ", count);
         for (int i = 0; i < count; i++) {
           if (node_->key_less(key, key_slots_[i])) {
+            printf("%d ", key_slots_[i]);
             small_key_idxs.push_back(i);
           }
         }
-        return *(std::max_element(small_key_idxs.begin(), small_key_idxs.end(), [&](order_t a, order_t b) {
+        printf("\n");
+        auto result = std::max_element(small_key_idxs.begin(), small_key_idxs.end(), [&](order_t a, order_t b) {
           return node_->key_less(key_slots_[a], key_slots_[b]);
-        }));
+        });
+        if (result == small_key_idxs.end()) {
+          return -1;
+        }
+        printf("result: %d\n");
+        return *result;
       }
     }
 
@@ -732,9 +753,13 @@ public:
             large_key_idxs.push_back(i);
           }
         }
-        return *(std::min_element(large_key_idxs.begin(), large_key_idxs.end(), [&](order_t a, order_t b) {
+        auto result = std::min_element(large_key_idxs.begin(), large_key_idxs.end(), [&](order_t a, order_t b) {
           return node_->key_less(key_slots_[a], key_slots_[b]);
-        }));
+        });
+        if (result == large_key_idxs.end()) {
+          return -1;
+        }
+        return *result;
       }
     }
 
@@ -1060,6 +1085,14 @@ public:
     }
     
     return num_keys;
+  }
+
+  bool key_exists(const T &key) const {
+    int position = predict_position(key);
+    if (position < data_capacity_) {
+      return buffer_[position]->key_exists(key);
+    }
+    return false;
   }
 
   // True if a < b
@@ -1889,19 +1922,13 @@ public:
   int find_key(const T &key) {
     num_lookups_++;
     int position = predict_position(key);
-    auto buf = buffer_[position];
-    order_t next_order = buf->order_slots_[buf->min_idx];
-    T next_key = buf->key_slots_[next_order];
 
-    while (next_order != -1) {
-      if (next_key == key) {
-        return next_order;
-      }
-      next_order = buf->order_slots_[next_order];
-      next_key = buf->key_slots_[next_order];
+    if (!check_exists(position)) {
+      return -1;
     }
-
-    return -1;
+    
+    auto buf = buffer_[position];
+    return buf->find_idx(key);
   }
 
   int find_lower_bound(const T &key) {
@@ -2053,9 +2080,15 @@ public:
     // Insert
     int position = predict_position(key);
     std::cout << "position: " << position << std::endl;
+
     if (position < data_capacity_) {
       if (check_exists(position)) {
-        bool result = buffer_[position]->append(key, payload);
+        auto buf = buffer_[position];
+        if (buf->key_exists(key)) {
+          return {-1, position};
+        }
+
+        bool result = buf->append(key, payload);
         if (!result) { /// try to insert into full buffer
           bool keep_left = is_append_mostly_right();
           bool keep_right = is_append_mostly_left();
@@ -2073,6 +2106,8 @@ public:
         buffer_[position] = new AlexDataBuffer(this, key, payload);
         set_bit(position);
       }
+    } else {
+      return {3, -1};
     }
 
     // Update stats
