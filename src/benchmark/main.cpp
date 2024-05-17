@@ -13,8 +13,8 @@
 #include "utils.h"
 
 // Modify these if running your own workload
-#define KEY_TYPE double
-#define PAYLOAD_TYPE double
+#define KEY_TYPE uint64_t
+#define PAYLOAD_TYPE uint64_t
 
 long long memory_consumption(alex::Alex<KEY_TYPE, PAYLOAD_TYPE> &index) {
   long long memory = -1;
@@ -77,7 +77,7 @@ int main(int argc, char* argv[]) {
             [](auto const &a, auto const &b) { return a.first < b.first; });
 
   index.bulk_load(values, init_num_keys);
-  std::cout << "memory_consumption: " << memory_consumption(index) << std::endl;
+  // std::cout << "memory_consumption: " << memory_consumption(index) << std::endl;
 
   // Run workload
   long i = init_num_keys;
@@ -143,6 +143,7 @@ int main(int argc, char* argv[]) {
     auto inserts_start_time = std::chrono::high_resolution_clock::now();
 
     for (; i < num_keys_after_batch; i++) {
+      std::cout << "keys[i]: " << keys[i] << std::endl;
       index.insert(keys[i], static_cast<PAYLOAD_TYPE>(gen_payload()));
     }
 
@@ -174,9 +175,9 @@ int main(int argc, char* argv[]) {
 
     // Check for workload end conditions
     if (index_size > 0) {
-      if (memory_consumption(index) > index_size) {
-        break;
-      }
+      // if (memory_consumption(index) > index_size) {
+      //   break;
+      // }
     } else {
       if (num_actual_inserts < num_inserts_per_batch) {
         // End if we have inserted all keys in a workload with inserts
@@ -203,7 +204,7 @@ int main(int argc, char* argv[]) {
             << cumulative_lookups / cumulative_lookup_time * 1e9 << " lookups/sec, "
             << cumulative_inserts / cumulative_insert_time * 1e9 << " inserts/sec, "
             << cumulative_operations / cumulative_time * 1e9 << " ops/sec"
-            << " index size: " << memory_consumption(index) << " bytes"
+            // << " index size: " << memory_consumption(index) << " bytes"
             << std::endl;
 
   index.stats_.print();

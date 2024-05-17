@@ -15,8 +15,6 @@
  * - Iterator find(T key)  // for exact match
  * - Iterator begin()
  * - Iterator end()
- * - Iterator lower_bound(T key)
- * - Iterator upper_bound(T key)
  *
  * User-facing API of Iterator:
  * - void operator ++ ()  // post increment
@@ -57,6 +55,7 @@ template <class T, class P, class Compare = AlexCompare,
 class Alex {
   static_assert(std::is_arithmetic<T>::value, "ALEX key type must be numeric.");
   static_assert(std::is_same<Compare, AlexCompare>::value, "Must use AlexCompare.");
+  // static_assert(alignof(T) % 64 == 0, "Key type must be 64-byte aligned.");
 
 public:
   // Value type, returned by dereferencing an iterator
@@ -214,7 +213,7 @@ private:
 
   // At least this many keys must be outside the domain before a domain
   // expansion is triggered.
-  static const int kMinOutOfDomainKeys = 5;
+  static const int kMinOutOfDomainKeys = 10;
   // After this many keys are outside the domain, a domain expansion must be
   // triggered.
   static const int kMaxOutOfDomainKeys = 1000;
@@ -282,7 +281,7 @@ public:
     }
     std::sort(values.begin(), values.end(),
       [this](auto const &a, auto const &b) {
-        return key_less_(a.first, b.first);
+        return key_less_(a.first, b.first); // key descending
       });
     bulk_load(values.data(), static_cast<int>(values.size()));
   }
@@ -352,8 +351,7 @@ private:
   AlexNode<T, P> *copy_tree_recursive(const AlexNode<T, P> *node) {
     if (!node) return nullptr;
     if (node->is_leaf_) {
-      return new (data_node_allocator().allocate(1))
-          data_node_type(*static_cast<const data_node_type *>(node));
+      return new (data_node_allocator().allocate(1)) data_node_type(*static_cast<const data_node_type *>(node));
     } else {
       auto node_copy = new (model_node_allocator().allocate(1)) model_node_type(*static_cast<const model_node_type *>(node));
       int cur = 0;
@@ -417,6 +415,7 @@ public:
     if (traversal_path) {
       traversal_path->push_back({superroot_, 0});
     }
+
     AlexNode<T, P> *cur = root_node_;
     if (cur->is_leaf_) {
       return static_cast<data_node_type *>(cur);
@@ -467,18 +466,18 @@ public:
     }
   }
 #else
-  data_node_type *get_leaf(
-      T key, std::vector<TraversalNode> *traversal_path = nullptr) const {
+  data_node_type *get_leaf(T key, std::vector<TraversalNode> *traversal_path = nullptr) const {
     if (traversal_path) {
       traversal_path->push_back({superroot_, 0});
     }
+
     AlexNode<T, P> *cur = root_node_;
 
     while (!cur->is_leaf_) {
       auto node = static_cast<model_node_type *>(cur);
       int bucketID = node->model_.predict(key);
-      bucketID =
-          std::min<int>(std::max<int>(bucketID, 0), node->num_children_ - 1);
+      bucketID = std::min<int>(std::max<int>(bucketID, 0), node->num_children_ - 1);
+
       if (traversal_path) {
         traversal_path->push_back({node, bucketID});
       }
@@ -510,6 +509,7 @@ private:
           parent = tn.node;
           start_bucketID = tn.bucketID - (tn.bucketID % repeats);
         }
+
         int correct_bucketID = start_bucketID - 1;
         tn.bucketID = correct_bucketID;
         AlexNode<T, P> *cur = parent->children_[correct_bucketID];
@@ -539,6 +539,7 @@ private:
           parent = tn.node;
           end_bucketID = tn.bucketID - (tn.bucketID % repeats) + repeats;
         }
+
         int correct_bucketID = end_bucketID;
         tn.bucketID = correct_bucketID;
         AlexNode<T, P> *cur = parent->children_[correct_bucketID];
@@ -585,8 +586,7 @@ private:
   // Link all data nodes together. Used after bulk loading.
   void link_all_data_nodes() {
     data_node_type *prev_leaf = nullptr;
-    for (NodeIterator node_it = NodeIterator(this); !node_it.is_end();
-         node_it.next()) {
+    for (NodeIterator node_it = NodeIterator(this); !node_it.is_end(); node_it.next()) {
       AlexNode<T, P> *cur = node_it.current();
       if (cur->is_leaf_) {
         auto node = static_cast<data_node_type *>(cur);
@@ -657,8 +657,6 @@ private:
     return !key_less_(a, b) && !key_less_(b, a);
   }
 
-  /*** Bulk loading ***/
-
 public:
   void set_density(double init_density, double delta) {
     double min_density = std::max(0.1, init_density - delta);
@@ -668,6 +666,9 @@ public:
     kMinDensity = min_density;
     kMaxDensity = max_density;
   }
+
+  /*** Bulk loading ***/
+
   // values should be the sorted array of key-payload pairs.
   // The number of elements should be num_keys.
   // The index must be empty when calling this method.
@@ -688,9 +689,9 @@ public:
 
     // Compute cost of root node
     LinearModel<T> root_data_node_model;
-    data_node_type::build_model(values, num_keys, &root_data_node_model,
-                                params_.approximate_model_computation);
+    data_node_type::build_model(values, num_keys, &root_data_node_model, params_.approximate_model_computation);
     DataNodeStats stats;
+
     root_node_->cost_ = data_node_type::compute_expected_cost(
       values, num_keys, kInitDensity,
       params_.expected_insert_frac, &root_data_node_model,
@@ -707,6 +708,8 @@ public:
     create_superroot();
     update_superroot_key_domain();
     link_all_data_nodes();
+
+    std::cout << "bulk_load end" << std::endl;
   }
 
   void print() {
@@ -730,7 +733,9 @@ private:
   void update_superroot_key_domain() {
     assert(stats_.num_inserts == 0 || root_node_->is_leaf_);
     istats_.key_domain_min_ = get_min_key();
+    std::cout << "key_domain_min_: " << istats_.key_domain_min_ << std::endl;
     istats_.key_domain_max_ = get_max_key();
+    std::cout << "key_domain_max_: " << istats_.key_domain_max_ << std::endl;
     istats_.num_keys_at_last_right_domain_resize = stats_.num_keys;
     istats_.num_keys_at_last_left_domain_resize = stats_.num_keys;
     istats_.num_keys_above_key_domain = 0;
@@ -754,11 +759,12 @@ private:
                       int total_keys, const LinearModel<T> *data_node_model = nullptr) {
     // Automatically convert to data node when it is impossible to be better
     // than current cost
+    // std::cout << "node cost: " << node->cost_ << ", slope: " << node->model_.a_ << ", intercept: " << node->model_.b_ << std::endl;
     if (num_keys <= derived_params_.max_data_node_slots * kInitDensity &&
       (node->cost_ < kNodeLookupsWeight || node->model_.a_ == 0)) {
+      // std::cout << "bulk_load_node: convert to data node 1" << std::endl;
       stats_.num_data_nodes++;
-      auto data_node = new (data_node_allocator().allocate(1))
-        data_node_type(node->level_, derived_params_.max_data_node_slots, key_less_, allocator_);
+      auto data_node = new (data_node_allocator().allocate(1)) data_node_type(node->level_, derived_params_.max_data_node_slots, key_less_, allocator_);
       data_node->bulk_load(values, num_keys, data_node_model, params_.approximate_model_computation);
       data_node->cost_ = node->cost_;
       delete_node(node);
@@ -770,6 +776,7 @@ private:
     // child nodes
     std::vector<fanout_tree::FTNode> used_fanout_tree_nodes;
     std::pair<int, double> best_fanout_stats;
+
     if (experimental_params_.fanout_selection_method == 0) {
       int max_data_node_keys = static_cast<int>(
         derived_params_.max_data_node_slots * kInitDensity);
@@ -785,8 +792,11 @@ private:
         params_.approximate_model_computation,
         params_.approximate_cost_computation, key_less_);
     }
-    int best_fanout_tree_depth = best_fanout_stats.first;
-    double best_fanout_tree_cost = best_fanout_stats.second;
+
+    int best_fanout_tree_depth = best_fanout_stats.first; /// best level
+    double best_fanout_tree_cost = best_fanout_stats.second; /// best cost
+
+    // std::cout << "best_fanout_tree_depth: " << best_fanout_tree_depth << ", best_fanout_tree_cost: " << best_fanout_tree_cost << std::endl;
 
     // Decide whether this node should be a model node or data node
     if (best_fanout_tree_cost < node->cost_ ||
@@ -801,11 +811,10 @@ private:
         // order to satisfy the max node size, so we compute the fanout that
         // would satisfy that condition
         // in expectation
-        best_fanout_tree_depth =
-          static_cast<int>(std::log2(static_cast<double>(num_keys) / derived_params_.max_data_node_slots)) + 1;
+        best_fanout_tree_depth = static_cast<int>(std::log2(static_cast<double>(num_keys) / derived_params_.max_data_node_slots)) + 1;
         used_fanout_tree_nodes.clear();
-        int max_data_node_keys = static_cast<int>(
-          derived_params_.max_data_node_slots * kInitDensity);
+
+        int max_data_node_keys = static_cast<int>(derived_params_.max_data_node_slots * kInitDensity);
         fanout_tree::compute_level<T, P>(
           values, num_keys, node, total_keys, used_fanout_tree_nodes,
           best_fanout_tree_depth, max_data_node_keys,
@@ -817,7 +826,7 @@ private:
       model_node->model_.a_ = node->model_.a_ * fanout;
       model_node->model_.b_ = node->model_.b_ * fanout;
       model_node->num_children_ = fanout;
-      model_node->children_ = new (pointer_allocator().allocate(fanout)) AlexNode<T, P>*[fanout];
+      model_node->children_ = new (pointer_allocator().allocate(fanout)) AlexNode<T, P> *[fanout];
 
       // Instantiate all the child nodes and recurse
       int cur = 0;
@@ -826,10 +835,12 @@ private:
         child_node->cost_ = tree_node.cost;
         child_node->duplication_factor_ = static_cast<uint8_t>(best_fanout_tree_depth - tree_node.level);
         int repeats = 1 << child_node->duplication_factor_;
+        // std::cout << "FTNode(" << tree_node.node_id << "): " << repeats << std::endl;
         double left_value = static_cast<double>(cur) / fanout;
         double right_value = static_cast<double>(cur + repeats) / fanout;
         double left_boundary = (left_value - node->model_.b_) / node->model_.a_;
         double right_boundary = (right_value - node->model_.b_) / node->model_.a_;
+        // std::cout << "reapeats: " << repeats << ", left_boundary: " << left_boundary << ", right_boundary: " << right_boundary << std::endl;
         child_node->model_.a_ = 1.0 / (right_boundary - left_boundary);
         child_node->model_.b_ = -child_node->model_.a_ * left_boundary;
         model_node->children_[cur] = child_node;
@@ -842,12 +853,12 @@ private:
 
         model_node->children_[cur]->duplication_factor_ = static_cast<uint8_t>(best_fanout_tree_depth - tree_node.level);
         if (model_node->children_[cur]->is_leaf_) {
-          static_cast<data_node_type *>(model_node->children_[cur])
-            ->expected_avg_exp_search_iterations_ =
+          static_cast<data_node_type *>(model_node->children_[cur])->expected_avg_exp_search_iterations_ =
             tree_node.expected_avg_search_iterations;
-          static_cast<data_node_type *>(model_node->children_[cur])
-            ->expected_avg_shifts_ = tree_node.expected_avg_shifts;
+          static_cast<data_node_type *>(model_node->children_[cur])->expected_avg_shifts_ =
+            tree_node.expected_avg_shifts;
         }
+        
         for (int i = cur + 1; i < cur + repeats; i++) {
           model_node->children_[i] = model_node->children_[cur];
         }
@@ -858,6 +869,7 @@ private:
       node = model_node;
     } else {
       // Convert to data node
+      // std::cout << "bulk_load_node: convert to data node 2" << std::endl;
       stats_.num_data_nodes++;
       auto data_node = new (data_node_allocator().allocate(1)) data_node_type(node->level_, derived_params_.max_data_node_slots, key_less_, allocator_);
       data_node->bulk_load(values, num_keys, data_node_model, params_.approximate_model_computation);
@@ -897,6 +909,7 @@ private:
     } else {
       node->bulk_load_from_existing(existing_node, left, right, keep_left, keep_right);
     }
+
     node->max_slots_ = derived_params_.max_data_node_slots;
     if (compute_cost) {
       node->cost_ = node->compute_expected_cost(existing_node->frac_inserts());
@@ -907,12 +920,12 @@ private:
   /*** Lookup ***/
 
 public:
+
   // Looks for an exact match of the key
   // If the key does not exist, returns an end iterator
   // If there are multiple keys with the same value, returns an iterator to the
   // right-most key
   // If you instead want an iterator to the left-most key with the input value,
-  // use lower_bound()
   typename self_type::Iterator find(const T &key) {
     stats_.num_lookups++;
     data_node_type *leaf = get_leaf(key);
@@ -935,114 +948,18 @@ public:
     }
   }
 
-  size_t count(const T &key) {
-    ConstIterator it = lower_bound(key);
-    size_t num_equal = 0;
-    while (!it.is_end() && key_equal(it.key(), key)) {
-      num_equal++;
-      ++it;
-    }
-    return num_equal;
-  }
-
-  // Returns an iterator to the first key no less than the input value
-  typename self_type::Iterator lower_bound(const T &key) {
-    stats_.num_lookups++;
-    data_node_type *leaf = get_leaf(key);
-    int idx = leaf->find_lower(key);
-    return Iterator(leaf, idx);  // automatically handles the case where idx ==
-                                 // leaf->data_capacity
-  }
-
-  typename self_type::ConstIterator lower_bound(const T &key) const {
-    stats_.num_lookups++;
-    data_node_type *leaf = get_leaf(key);
-    int idx = leaf->find_lower(key);
-    return ConstIterator(leaf, idx);  // automatically handles the case where
-                                      // idx == leaf->data_capacity
-  }
-
-  // Returns an iterator to the first key greater than the input value
-  typename self_type::Iterator upper_bound(const T &key) {
-    stats_.num_lookups++;
-    data_node_type *leaf = get_leaf(key);
-    int idx = leaf->find_upper(key);
-    return Iterator(leaf, idx);  // automatically handles the case where idx ==
-                                 // leaf->data_capacity
-  }
-
-  typename self_type::ConstIterator upper_bound(const T &key) const {
-    stats_.num_lookups++;
-    data_node_type *leaf = get_leaf(key);
-    int idx = leaf->find_upper(key);
-    return ConstIterator(leaf, idx);  // automatically handles the case where
-                                      // idx == leaf->data_capacity
-  }
-
-  std::pair<Iterator, Iterator> equal_range(const T &key) {
-    return std::pair<Iterator, Iterator>(lower_bound(key), upper_bound(key));
-  }
-
-  std::pair<ConstIterator, ConstIterator> equal_range(const T &key) const {
-    return std::pair<ConstIterator, ConstIterator>(lower_bound(key), upper_bound(key));
-  }
-
   // Directly returns a pointer to the payload found through find(key)
   // This avoids the overhead of creating an iterator
   // Returns null pointer if there is no exact match of the key
   P *get_payload(const T &key) const {
     stats_.num_lookups++;
     data_node_type *leaf = get_leaf(key);
-    int idx = leaf->find_key(key);
-    if (idx < 0) {
+    int position = leaf->predict_position(key);
+    int pos = leaf->find_key(key);
+    if (pos < 0) {
       return nullptr;
     } else {
-      return &(leaf->get_payload(idx));
-    }
-  }
-
-  // Looks for the last key no greater than the input value
-  // Conceptually, this is equal to the last key before upper_bound()
-  typename self_type::Iterator find_last_no_greater_than(const T &key) {
-    stats_.num_lookups++;
-    data_node_type *leaf = get_leaf(key);
-    const int idx = leaf->upper_bound(key) - 1;
-    if (idx >= 0) {
-      return Iterator(leaf, idx);
-    }
-
-    // Edge case: need to check previous data node(s)
-    while (true) {
-      if (leaf->prev_leaf_ == nullptr) {
-        return Iterator(leaf, 0);
-      }
-      leaf = leaf->prev_leaf_;
-      if (leaf->num_keys_ > 0) {
-        return Iterator(leaf, leaf->last_pos());
-      }
-    }
-  }
-
-  // Directly returns a pointer to the payload found through
-  // find_last_no_greater_than(key)
-  // This avoids the overhead of creating an iterator
-  P *get_payload_last_no_greater_than(const T &key) {
-    stats_.num_lookups++;
-    data_node_type *leaf = get_leaf(key);
-    const int idx = leaf->upper_bound(key) - 1;
-    if (idx >= 0) {
-      return &(leaf->get_payload(idx));
-    }
-
-    // Edge case: Need to check previous data node(s)
-    while (true) {
-      if (leaf->prev_leaf_ == nullptr) {
-        return &(leaf->get_payload(leaf->first_pos()));
-      }
-      leaf = leaf->prev_leaf_;
-      if (leaf->num_keys_ > 0) {
-        return &(leaf->get_payload(leaf->last_pos()));
-      }
+      return leaf->buffer_[position]->get_payload(pos);
     }
   }
 
@@ -1139,18 +1056,27 @@ public:
     // If enough keys fall outside the key domain, expand the root to expand the
     // key domain
     if (key > istats_.key_domain_max_) {
+      std::cout << "key is above key domain" << std::endl;
       istats_.num_keys_above_key_domain++;
       if (should_expand_right()) {
+        std::cout << "expand root to the right" << std::endl;
         expand_root(key, false);  // expand to the right
       }
     } else if (key < istats_.key_domain_min_) {
+      std::cout << "key is below key domain" << std::endl;
       istats_.num_keys_below_key_domain++;
       if (should_expand_left()) {
+        std::cout << "expand root to the left" << std::endl;
         expand_root(key, true);  // expand to the left
       }
     }
 
     data_node_type *leaf = get_leaf(key);
+
+    if (leaf->key_exists(key)) {
+      // Duplicate found and duplicates not allowed
+      return {Iterator(leaf, leaf->find_key(key)), false};
+    }
 
     // Nonzero fail flag means that the insert did not happen
     std::pair<int, int> ret = leaf->insert(key, payload);
@@ -1170,8 +1096,13 @@ public:
       model_node_type *parent = traversal_path.back().node;
       num_failure++;
 
+      auto split_start_time = std::chrono::high_resolution_clock::now();
+
       while (fail) {
+        auto start_time = std::chrono::high_resolution_clock::now();
         stats_.num_expand_and_scales += leaf->num_resizes_;
+
+        /*** select best SMO ***/
 
         if (parent == superroot_) {
           update_superroot_key_domain();
@@ -1198,11 +1129,10 @@ public:
         int best_fanout = 1 << fanout_tree_depth;
         auto cost_computation_time =
           std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::high_resolution_clock::now() - split_start_time).count();
+            std::chrono::high_resolution_clock::now() - start_time).count();
         stats_.cost_computation_time += cost_computation_time;
 
         if (fanout_tree_depth == 0) {
-          auto expand_start_time = std::chrono::high_resolution_clock::now();
           // expand existing data node and retrain model
           leaf->resize(kMinDensity, true,
                        leaf->is_append_mostly_right(),
@@ -1222,6 +1152,7 @@ public:
             // allow splitting upwards
             assert(experimental_params_.splitting_policy_method != 2);
             int stop_propagation_level = best_split_propagation(traversal_path);
+
             if (stop_propagation_level <= superroot_->level_) {
               parent = split_downwards(parent, bucketID, fanout_tree_depth, used_fanout_tree_nodes, reuse_model);
             } else {
@@ -1230,8 +1161,9 @@ public:
           } else {
             // either split sideways or downwards
             bool should_split_downwards =
-              (parent->num_children_ * best_fanout / (1 << leaf->duplication_factor_) >
-                derived_params_.max_fanout || parent->level_ == superroot_->level_);
+              (parent->num_children_ * best_fanout / (1 << leaf->duplication_factor_) > derived_params_.max_fanout ||
+              parent->level_ == superroot_->level_);
+
             if (should_split_downwards) {
               parent = split_downwards(parent, bucketID, fanout_tree_depth, used_fanout_tree_nodes, reuse_model);
             } else {
@@ -1240,6 +1172,7 @@ public:
           }
           leaf = static_cast<data_node_type *>(parent->get_child_node(key));
         }
+
         auto split_end_time = std::chrono::high_resolution_clock::now();
         auto splitting_time = std::chrono::duration_cast<std::chrono::nanoseconds>(split_end_time - split_start_time).count();
         stats_.splitting_time += splitting_time;
@@ -1274,9 +1207,7 @@ private:
   bool should_expand_right() const {
     return (!root_node_->is_leaf_ &&
             ((istats_.num_keys_above_key_domain >= kMinOutOfDomainKeys &&
-              istats_.num_keys_above_key_domain >=
-                kOutOfDomainToleranceFactor *
-                  (stats_.num_keys / istats_.num_keys_at_last_right_domain_resize - 1)) ||
+              istats_.num_keys_above_key_domain >= kOutOfDomainToleranceFactor * (stats_.num_keys / istats_.num_keys_at_last_right_domain_resize - 1)) ||
               istats_.num_keys_above_key_domain >= kMaxOutOfDomainKeys));
   }
 
@@ -1285,9 +1216,7 @@ private:
   bool should_expand_left() const {
     return (!root_node_->is_leaf_ &&
             ((istats_.num_keys_below_key_domain >= kMinOutOfDomainKeys &&
-              istats_.num_keys_below_key_domain >=
-                kOutOfDomainToleranceFactor *
-                  (stats_.num_keys / istats_.num_keys_at_last_left_domain_resize - 1)) ||
+              istats_.num_keys_below_key_domain >= kOutOfDomainToleranceFactor * (stats_.num_keys / istats_.num_keys_at_last_left_domain_resize - 1)) ||
               istats_.num_keys_below_key_domain >= kMaxOutOfDomainKeys));
   }
 
@@ -1304,6 +1233,7 @@ private:
     for (const TraversalNode &tn : traversal_path) {
       double stop_cost;
       AlexNode<T, P> *next = tn.node->children_[tn.bucketID];
+
       if (next->duplication_factor_ > 0) {
         stop_cost = 0;
       } else {
@@ -1312,6 +1242,7 @@ private:
             ? std::numeric_limits<double>::max()
             : tn.node->num_children_ + SplitDecisionCosts::base_cost;
       }
+      
       traversal_costs.push_back(
         {stop_cost,
           tn.node->num_children_ <= 2
@@ -1324,6 +1255,7 @@ private:
     double cumulative_cost = 0;
     double best_cost = std::numeric_limits<double>::max();
     int best_path_level = superroot_->level_;
+
     for (int i = traversal_costs.size() - 1; i >= 0; i--) {
       SplitDecisionCosts &c = traversal_costs[i];
       if (c.stop_cost != std::numeric_limits<double>::max() &&
@@ -1361,7 +1293,8 @@ private:
     int expansion_factor;
     T new_domain_min = istats_.key_domain_min_;
     T new_domain_max = istats_.key_domain_max_;
-    data_node_type * outermost_node;
+    data_node_type *outermost_node;
+
     if (expand_left) {
       auto key_difference = static_cast<double>(istats_.key_domain_min_ - std::min(key, get_min_key()));
       expansion_factor = pow_2_round_up(static_cast<int>(std::ceil((key_difference + domain_size) / domain_size)));
@@ -1369,6 +1302,7 @@ private:
       // this check, we do comparisons using half of the relevant quantities.
       T half_expandable_domain = istats_.key_domain_max_ / 2 - std::numeric_limits<T>::lowest() / 2;
       T half_expanded_domain_size = expansion_factor / 2 * domain_size;
+
       if (half_expandable_domain < half_expanded_domain_size) {
         new_domain_min = std::numeric_limits<T>::lowest();
       } else {
@@ -1386,6 +1320,7 @@ private:
       // this check, we do comparisons using half of the relevant quantities.
       T half_expandable_domain = std::numeric_limits<T>::max() / 2 - istats_.key_domain_min_ / 2;
       T half_expanded_domain_size = expansion_factor / 2 * domain_size;
+
       if (half_expandable_domain < half_expanded_domain_size) {
         new_domain_max = std::numeric_limits<T>::max();
       } else {
@@ -1397,11 +1332,13 @@ private:
       istats_.num_keys_above_key_domain = 0;
       outermost_node = last_data_node();
     }
+
     assert(expansion_factor > 1);
 
     // Modify the root node appropriately
     int new_nodes_start;  // index of first pointer to a new node
     int new_nodes_end;    // exclusive
+
     if (static_cast<size_t>(root->num_children_) * expansion_factor <=
         static_cast<size_t>(derived_params_.max_fanout)) {
       // Expand root node
@@ -1409,9 +1346,9 @@ private:
       stats_.num_model_node_expansion_pointers += root->num_children_;
 
       int new_num_children = root->num_children_ * expansion_factor;
-      auto new_children = new (pointer_allocator().allocate(new_num_children))
-        AlexNode<T, P> *[new_num_children];
+      auto new_children = new (pointer_allocator().allocate(new_num_children)) AlexNode<T, P> *[new_num_children];
       int copy_start;
+
       if (expand_left) {
         copy_start = new_num_children - root->num_children_;
         new_nodes_start = 0;
@@ -1422,24 +1359,26 @@ private:
         new_nodes_start = root->num_children_;
         new_nodes_end = new_num_children;
       }
+
       for (int i = 0; i < root->num_children_; i++) {
         new_children[copy_start + i] = root->children_[i];
       }
+
       pointer_allocator().deallocate(root->children_, root->num_children_);
       root->children_ = new_children;
       root->num_children_ = new_num_children;
     } else {
       // Create new root node
-      auto new_root = new (model_node_allocator().allocate(1))
-        model_node_type(static_cast<short>(root->level_ - 1), allocator_);
+      auto new_root = new (model_node_allocator().allocate(1)) model_node_type(static_cast<short>(root->level_ - 1), allocator_);
       new_root->model_.a_ = root->model_.a_ / root->num_children_;
       new_root->model_.b_ = root->model_.b_ / root->num_children_;
+
       if (expand_left) {
         new_root->model_.b_ += expansion_factor - 1;
       }
       new_root->num_children_ = expansion_factor;
-      new_root->children_ = new (pointer_allocator().allocate(expansion_factor))
-        AlexNode<T, P> *[expansion_factor];
+      new_root->children_ = new (pointer_allocator().allocate(expansion_factor)) AlexNode<T, P> *[expansion_factor];
+
       if (expand_left) {
         new_root->children_[expansion_factor - 1] = root;
         new_nodes_start = 0;
@@ -1447,15 +1386,18 @@ private:
         new_root->children_[0] = root;
         new_nodes_start = 1;
       }
+
       new_nodes_end = new_nodes_start + expansion_factor - 1;
       root_node_ = new_root;
       update_superroot_pointer();
       root = new_root;
     }
+
     // Determine if new nodes represent a range outside the key type's domain.
     // This happens when we're preventing overflows.
     int in_bounds_new_nodes_start = new_nodes_start;
     int in_bounds_new_nodes_end = new_nodes_end;
+
     if (expand_left) {
       in_bounds_new_nodes_start = std::max(new_nodes_start, root->model_.predict(new_domain_min));
     } else {
@@ -1470,38 +1412,45 @@ private:
     int n = root->num_children_ - (new_nodes_end - new_nodes_start);
     assert(root->num_children_ % n == 0);
     auto new_node_duplication_factor = static_cast<uint8_t>(log_2_round_down(n));
+
     if (expand_left) {
       T left_boundary_value = istats_.key_domain_min_;
-      int left_boundary = outermost_node->lower_bound(left_boundary_value);
+      int left_boundary = outermost_node->predict_position(left_boundary_value);
       data_node_type *next = outermost_node;
+
       for (int i = new_nodes_end; i > new_nodes_start; i -= n) {
         if (i <= in_bounds_new_nodes_start) {
           // Do not initialize nodes that fall outside the key type's domain
           break;
         }
+
         int right_boundary = left_boundary;
         if (i - n <= in_bounds_new_nodes_start) {
           left_boundary = 0;
         } else {
           left_boundary_value -= domain_size;
-          left_boundary = outermost_node->lower_bound(left_boundary_value);
+          left_boundary = outermost_node->predict_position(left_boundary_value);
         }
+
         data_node_type *new_node = bulk_load_leaf_node_from_existing(outermost_node, left_boundary, right_boundary, true);
         new_node->level_ = static_cast<short>(root->level_ + 1);
         new_node->duplication_factor_ = new_node_duplication_factor;
+
         if (next) {
           next->prev_leaf_ = new_node;
         }
         new_node->next_leaf_ = next;
         next = new_node;
+
         for (int j = i - 1; j >= i - n; j--) {
           root->children_[j] = new_node;
         }
       }
     } else {
       T right_boundary_value = istats_.key_domain_max_;
-      int right_boundary = outermost_node->lower_bound(right_boundary_value);
+      int right_boundary = outermost_node->predict_position(right_boundary_value);
       data_node_type *prev = nullptr;
+
       for (int i = new_nodes_start; i < new_nodes_end; i += n) {
         if (i >= in_bounds_new_nodes_end) {
           // Do not initialize nodes that fall outside the key type's domain
@@ -1512,16 +1461,19 @@ private:
           right_boundary = outermost_node->data_capacity_;
         } else {
           right_boundary_value += domain_size;
-          right_boundary = outermost_node->lower_bound(right_boundary_value);
+          right_boundary = outermost_node->predict_position(right_boundary_value);
         }
+
         data_node_type *new_node = bulk_load_leaf_node_from_existing(outermost_node, left_boundary, right_boundary, true);
         new_node->level_ = static_cast<short>(root->level_ + 1);
         new_node->duplication_factor_ = new_node_duplication_factor;
+
         if (prev) {
           prev->next_leaf_ = new_node;
         }
         new_node->prev_leaf_ = prev;
         prev = new_node;
+
         for (int j = i; j < i + n; j++) {
           root->children_[j] = new_node;
         }
@@ -1584,6 +1536,7 @@ private:
     delete_node(leaf);
     stats_.num_data_nodes--;
     stats_.num_model_nodes++;
+
     for (int i = start_bucketID; i < end_bucketID; i++) {
       parent->children_[i] = new_node;
     }
@@ -1607,6 +1560,7 @@ private:
 
     int fanout = 1 << fanout_tree_depth;
     int repeats = 1 << leaf->duplication_factor_;
+
     if (fanout > repeats) {
       // Expand the pointer array in the parent model node if there are not
       // enough redundant pointers
@@ -1621,9 +1575,9 @@ private:
     if (used_fanout_tree_nodes.empty()) {
       assert(fanout_tree_depth == 1);
       create_two_new_data_nodes(
-          leaf, parent,
-          std::max(fanout_tree_depth, static_cast<int>(leaf->duplication_factor_)),
-          reuse_model, start_bucketID);
+        leaf, parent,
+        std::max(fanout_tree_depth, static_cast<int>(leaf->duplication_factor_)),
+        reuse_model, start_bucketID);
     } else {
       // Extra duplication factor is required when there are more redundant
       // pointers than necessary
@@ -1648,6 +1602,7 @@ private:
                                  int duplication_factor, bool reuse_model,
                                  int start_bucketID = 0) {
     assert(duplication_factor >= 1);
+    
     int num_buckets = 1 << duplication_factor;
     int end_bucketID = start_bucketID + num_buckets;
     int mid_bucketID = start_bucketID + num_buckets / 2;
@@ -1661,28 +1616,28 @@ private:
       std::max<int>(parent->model_.predict(old_node->min_key_), 0),
       parent->num_children_ - 1);
 
-    int right_boundary = old_node->lower_bound((mid_bucketID - parent->model_.b_) / parent->model_.a_);
+    int right_boundary = old_node->predict_position((mid_bucketID - parent->model_.b_) / parent->model_.a_);
     // Account for off-by-one errors due to floating-point precision issues.
     while (right_boundary < old_node->data_capacity_ &&
-           old_node->get_key(right_boundary) != data_node_type::kEndSentinel_ &&
-           parent->model_.predict(old_node->get_key(right_boundary)) < mid_bucketID) {
+           old_node->buffer_[right_boundary]->get_max_key() != std::numeric_limits<T>::max() &&
+           parent->model_.predict(old_node->buffer_[right_boundary]->get_max_key()) < mid_bucketID) {
       right_boundary = std::min(
-        old_node->get_next_filled_position(right_boundary, false) + 1,
+        old_node->get_next_filled_buffer(right_boundary, false) + 1,
         old_node->data_capacity_);
     }
     data_node_type *left_leaf = bulk_load_leaf_node_from_existing(
-        old_node, 0, right_boundary, true, nullptr, reuse_model,
-        append_mostly_right && start_bucketID <= appending_right_bucketID &&
-          appending_right_bucketID < mid_bucketID,
-        append_mostly_left && start_bucketID <= appending_left_bucketID &&
-          appending_left_bucketID < mid_bucketID);
+      old_node, 0, right_boundary, true, nullptr, reuse_model,
+      append_mostly_right && start_bucketID <= appending_right_bucketID &&
+        appending_right_bucketID < mid_bucketID,
+      append_mostly_left && start_bucketID <= appending_left_bucketID &&
+        appending_left_bucketID < mid_bucketID);
     data_node_type *right_leaf = bulk_load_leaf_node_from_existing(
-        old_node, right_boundary, old_node->data_capacity_, true, nullptr,
-        reuse_model,
-        append_mostly_right && mid_bucketID <= appending_right_bucketID &&
-          appending_right_bucketID < end_bucketID,
-        append_mostly_left && mid_bucketID <= appending_left_bucketID &&
-          appending_left_bucketID < end_bucketID);
+      old_node, right_boundary, old_node->data_capacity_, true, nullptr,
+      reuse_model,
+      append_mostly_right && mid_bucketID <= appending_right_bucketID &&
+        appending_right_bucketID < end_bucketID,
+      append_mostly_left && mid_bucketID <= appending_left_bucketID &&
+        appending_left_bucketID < end_bucketID);
     left_leaf->level_ = static_cast<short>(parent->level_ + 1);
     right_leaf->level_ = static_cast<short>(parent->level_ + 1);
     left_leaf->duplication_factor_ = static_cast<uint8_t>(duplication_factor - 1);
@@ -1724,6 +1679,7 @@ private:
     // Keys may be re-assigned to an adjacent fanout tree node due to off-by-one
     // errors
     int num_reassigned_keys = 0;
+
     for (fanout_tree::FTNode &tree_node : used_fanout_tree_nodes) {
       left_boundary = right_boundary;
       auto duplication_factor = static_cast<uint8_t>(fanout_tree_depth - tree_node.level + extra_duplication_factor);
@@ -1736,14 +1692,16 @@ private:
       // Account for off-by-one errors due to floating-point precision issues.
       tree_node.num_keys -= num_reassigned_keys;
       num_reassigned_keys = 0;
+
       while (right_boundary < old_node->data_capacity_ &&
-             old_node->get_key(right_boundary) != data_node_type::kEndSentinel_ &&
-             parent->model_.predict(old_node->get_key(right_boundary)) < cur + child_node_repeats) {
+             old_node->buffer_[right_boundary]->get_max_key() != std::numeric_limits<T>::max() &&
+             parent->model_.predict(old_node->buffer_[right_boundary]->get_max_key()) < cur + child_node_repeats) {
         num_reassigned_keys++;
         right_boundary = std::min(
-          old_node->get_next_filled_position(right_boundary, false) + 1,
+          old_node->get_next_filled_buffer(right_boundary, false) + 1,
           old_node->data_capacity_);
       }
+
       tree_node.num_keys += num_reassigned_keys;
       data_node_type *child_node = bulk_load_leaf_node_from_existing(
         old_node, left_boundary, right_boundary, false, &tree_node, false, keep_left, keep_right);
@@ -1753,6 +1711,7 @@ private:
       child_node->expected_avg_exp_search_iterations_ = tree_node.expected_avg_search_iterations;
       child_node->expected_avg_shifts_ = tree_node.expected_avg_shifts;
       child_node->prev_leaf_ = prev_leaf;
+
       if (prev_leaf != nullptr) {
         prev_leaf->next_leaf_ = child_node;
       }
@@ -1762,6 +1721,7 @@ private:
       cur += child_node_repeats;
       prev_leaf = child_node;
     }
+
     prev_leaf->next_leaf_ = old_node->next_leaf_;
     if (old_node->next_leaf_ != nullptr) {
       old_node->next_leaf_->prev_leaf_ = prev_leaf;
@@ -1818,7 +1778,7 @@ private:
       }
     }
 
-    int mid_boundary = leaf->lower_bound((leaf_mid_bucketID - parent->model_.b_) / parent->model_.a_);
+    int mid_boundary = leaf->predict_position((leaf_mid_bucketID - parent->model_.b_) / parent->model_.a_);
     data_node_type *left_leaf = bulk_load_leaf_node_from_existing(
       leaf, 0, mid_boundary, true, nullptr, reuse_model,
       append_mostly_right && left_half_appending_right,
@@ -1951,6 +1911,7 @@ private:
         int start_bucketID = new_bucketID - (new_bucketID % repeats);  // first bucket with same child
         int mid_bucketID = start_bucketID + repeats / 2;
         int end_bucketID = start_bucketID + repeats;  // first bucket with next child
+        
         for (int i = start_bucketID; i < mid_bucketID; i++) {
           left_split->children_[i] = prev_left_split;
         }
@@ -2118,6 +2079,7 @@ public:
     data_node_type *leaf = get_leaf(key);
     int num_erased = leaf->erase(key);
     stats_.num_keys -= num_erased;
+
     if (leaf->num_keys_ == 0) {
       merge(leaf, key);
     }
@@ -2279,8 +2241,7 @@ public:
   // Size in bytes of all the keys, payloads, and bitmaps stored in this index
   long long data_size() const {
     long long size = 0;
-    for (NodeIterator node_it = NodeIterator(this); !node_it.is_end();
-         node_it.next()) {
+    for (NodeIterator node_it = NodeIterator(this); !node_it.is_end(); node_it.next()) {
       AlexNode<T, P> *cur = node_it.current();
       if (cur->is_leaf_) {
         size += static_cast<data_node_type *>(cur)->data_size();
@@ -2293,8 +2254,7 @@ public:
   // data nodes
   long long model_size() const {
     long long size = 0;
-    for (NodeIterator node_it = NodeIterator(this); !node_it.is_end();
-         node_it.next()) {
+    for (NodeIterator node_it = NodeIterator(this); !node_it.is_end(); node_it.next()) {
       size += node_it.current()->node_size();
     }
     return size;
@@ -2436,17 +2396,17 @@ public:
     }
 
     Iterator(const Iterator &other)
-        : cur_leaf_(other.cur_leaf_),
-          cur_idx_(other.cur_idx_),
-          cur_bitmap_idx_(other.cur_bitmap_idx_),
-          cur_bitmap_data_(other.cur_bitmap_data_) {}
+      : cur_leaf_(other.cur_leaf_),
+        cur_idx_(other.cur_idx_),
+        cur_bitmap_idx_(other.cur_bitmap_idx_),
+        cur_bitmap_data_(other.cur_bitmap_data_) {}
 
     Iterator(const ReverseIterator &other)
-        : cur_leaf_(other.cur_leaf_), cur_idx_(other.cur_idx_) {
+      : cur_leaf_(other.cur_leaf_), cur_idx_(other.cur_idx_) {
       initialize();
     }
 
-    Iterator& operator=(const Iterator &other) {
+    Iterator &operator=(const Iterator &other) {
       if (this != &other) {
         cur_idx_ = other.cur_idx_;
         cur_leaf_ = other.cur_leaf_;
@@ -2485,11 +2445,11 @@ public:
 
     bool is_end() const { return cur_leaf_ == nullptr; }
 
-    bool operator==(const Iterator& rhs) const {
+    bool operator==(const Iterator &rhs) const {
       return cur_idx_ == rhs.cur_idx_ && cur_leaf_ == rhs.cur_leaf_;
     }
 
-    bool operator!=(const Iterator& rhs) const { return !(*this == rhs); };
+    bool operator!=(const Iterator &rhs) const { return !(*this == rhs); };
 
   private:
     void initialize() {
@@ -2542,7 +2502,7 @@ public:
     ConstIterator() {}
 
     ConstIterator(const data_node_type *leaf, int idx)
-        : cur_leaf_(leaf), cur_idx_(idx) {
+      : cur_leaf_(leaf), cur_idx_(idx) {
       initialize();
     }
 
@@ -2895,14 +2855,13 @@ public:
 
   // Iterates through all nodes with pre-order traversal
   class NodeIterator {
-   public:
+  public:
     const self_type *index_;
     AlexNode<T, P> *cur_node_;
     std::stack<AlexNode<T, P> *> node_stack_;  // helps with traversal
 
     // Start with root as cur and all children of root in stack
-    explicit NodeIterator(const self_type *index)
-        : index_(index), cur_node_(index->root_node_) {
+    explicit NodeIterator(const self_type *index) : index_(index), cur_node_(index->root_node_) {
       if (cur_node_ && !cur_node_->is_leaf_) {
         auto node = static_cast<model_node_type *>(cur_node_);
         node_stack_.push(node->children_[node->num_children_ - 1]);
@@ -2928,6 +2887,7 @@ public:
       if (!cur_node_->is_leaf_) {
         auto node = static_cast<model_node_type *>(cur_node_);
         node_stack_.push(node->children_[node->num_children_ - 1]);
+
         for (int i = node->num_children_ - 2; i >= 0; i--) {
           if (node->children_[i] != node->children_[i + 1]) {
             node_stack_.push(node->children_[i]);
