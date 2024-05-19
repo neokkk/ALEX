@@ -673,6 +673,7 @@ public:
   // The number of elements should be num_keys.
   // The index must be empty when calling this method.
   void bulk_load(const V values[], int num_keys) {
+    std::cout << "bulk_load start" << std::endl;
     if (stats_.num_keys > 0 || num_keys <= 0) {
       return;
     }
@@ -684,8 +685,24 @@ public:
     root_node_ = new (model_node_allocator().allocate(1)) model_node_type(0, allocator_);
     T min_key = values[0].first;
     T max_key = values[num_keys - 1].first;
-    root_node_->model_.a_ = 1.0 / (max_key - min_key);
-    root_node_->model_.b_ = -1.0 * min_key * root_node_->model_.a_;
+    // double diff = max_key - min_key;
+
+    // double scaling_factor = 1e9;
+
+    // if (diff > scaling_factor) { /// for large key difference
+    //   double scaled_max_key = max_key / scaling_factor;
+    //   double scaled_min_key = min_key / scaling_factor;
+
+    //   if (scaled_max_key == scaled_min_key) {
+    //     root_node_->model_.a_ = 0.0;
+    //   } else {
+    //     root_node_->model_.a_ = 1.0 / (scaled_max_key - scaled_min_key);
+    //   }
+    //   root_node_->model_.b_ = -1.0 * scaled_min_key * root_node_->model_.a_;
+    // } else {
+      root_node_->model_.a_ = 1.0 / (max_key - min_key);
+      root_node_->model_.b_ = -1.0 * min_key * root_node_->model_.a_;
+    // }
 
     // Compute cost of root node
     LinearModel<T> root_data_node_model;
@@ -764,6 +781,7 @@ private:
       (node->cost_ < kNodeLookupsWeight || node->model_.a_ == 0)) {
       // std::cout << "bulk_load_node: convert to data node 1" << std::endl;
       stats_.num_data_nodes++;
+      std::cout << "num_keys: " << num_keys << ", derived_params_.max_data_node_slots * kInitDensity: " << derived_params_.max_data_node_slots * kInitDensity << std::endl;
       auto data_node = new (data_node_allocator().allocate(1)) data_node_type(node->level_, derived_params_.max_data_node_slots, key_less_, allocator_);
       data_node->bulk_load(values, num_keys, data_node_model, params_.approximate_model_computation);
       data_node->cost_ = node->cost_;
@@ -1333,6 +1351,7 @@ private:
       outermost_node = last_data_node();
     }
 
+    std::cout << "expansion_factor: " << expansion_factor << std::endl;
     assert(expansion_factor > 1);
 
     // Modify the root node appropriately
@@ -1412,6 +1431,7 @@ private:
     int n = root->num_children_ - (new_nodes_end - new_nodes_start);
     assert(root->num_children_ % n == 0);
     auto new_node_duplication_factor = static_cast<uint8_t>(log_2_round_down(n));
+    std::cout << "new_node_duplication_factor: " << new_node_duplication_factor << std::endl;
 
     if (expand_left) {
       T left_boundary_value = istats_.key_domain_min_;

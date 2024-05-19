@@ -38,7 +38,7 @@ long long memory_consumption(alex::Alex<KEY_TYPE, PAYLOAD_TYPE> &index) {
  * --index_size             the limit size of index
  * --print_batch_stats      whether to output stats for each batch
  */
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
   auto flags = parse_flags(argc, argv);
   std::string keys_file_path = get_required(flags, "keys_file");
   std::string keys_file_type = get_required(flags, "keys_file_type");
@@ -65,6 +65,8 @@ int main(int argc, char* argv[]) {
   // Combine bulk loaded keys with randomly generated payloads
   auto values = new std::pair<KEY_TYPE, PAYLOAD_TYPE>[init_num_keys];
   std::mt19937_64 gen_payload(std::random_device{}());
+
+  std::cout << "init_num_keys: " << init_num_keys << std::endl;
 
   for (int i = 0; i < init_num_keys; i++) {
     values[i].first = keys[i];

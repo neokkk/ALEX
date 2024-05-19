@@ -14,7 +14,7 @@ int main(int, char **) {
   // Create some synthetic data: keys are dense integers between 0 and 99, and
   // payloads are random values
   const int num_keys = 100;
-  std::pair<KEY_TYPE, PAYLOAD_TYPE> values[num_keys];
+  std::pair<int, int> values[100];
   std::mt19937_64 gen(std::random_device{}());
   std::uniform_int_distribution<PAYLOAD_TYPE> dis;
   

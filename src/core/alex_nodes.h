@@ -969,7 +969,7 @@ public:
     if (buffer_ == nullptr) {
       return;
     }
-    buffer_allocator().deallocate(buffer_, 1);
+    buffer_allocator().deallocate(buffer_, data_capacity_);
     bitmap_allocator().deallocate(bitmap_, bitmap_size_);
   }
 
@@ -1676,7 +1676,7 @@ public:
   void initialize(int num_keys, double density) {
     num_keys_ = num_keys;
     data_capacity_ = std::max(static_cast<int>(num_keys / density), num_keys);
-    bitmap_size_ = static_cast<size_t>(std::ceil(data_capacity_ / 64.));
+    bitmap_size_ = static_cast<size_t>(data_capacity_ == 0 ? 0 : std::ceil(data_capacity_ / 64.));
     bitmap_ = new (bitmap_allocator().allocate(bitmap_size_)) uint64_t[bitmap_size_]();  // initialize to all false
     buffer_ = new (buffer_allocator().allocate(data_capacity_)) AlexDataBuffer *[data_capacity_];
   }
@@ -1750,7 +1750,9 @@ public:
       const_iterator_type it(node, left);
       LinearModelBuilder<T> builder(&(this->model_));
 
-      num_actual_keys += build_new(builder, it, 0, right);
+      int result = build_new(builder, it, 0, right);
+      std::cout << "new_num_actual_keys: " << result << std::endl;
+      num_actual_keys += result;
     } else {
       num_actual_keys = precomputed_num_actual_keys;
       this->model_.a_ = precomputed_model->a_;
@@ -1796,7 +1798,6 @@ public:
           buffer_[position] = new AlexDataBuffer(this, keys[i], *(buf->get_payload(i)));
           set_bit(position);
         }
-        position++;
       }
     }
 
