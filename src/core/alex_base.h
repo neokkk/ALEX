@@ -39,8 +39,6 @@ typedef unsigned __int32 uint32_t;
 #include <stdint.h>
 #endif
 
-#include "../utils/bitmap.h"
-
 #ifdef _MSC_VER
 #define forceinline __forceinline
 #elif defined(__GNUC__)

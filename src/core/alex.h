@@ -831,10 +831,7 @@ private:
         // in expectation
         best_fanout_tree_depth = static_cast<int>(std::log2(static_cast<double>(num_keys) / derived_params_.max_data_node_slots)) + 1;
         used_fanout_tree_nodes.clear();
-<<<<<<< HEAD
 
-=======
->>>>>>> 4b3d25b (feat: add buffer)
         int max_data_node_keys = static_cast<int>(derived_params_.max_data_node_slots * kInitDensity);
         fanout_tree::compute_level<T, P>(
           values, num_keys, node, total_keys, used_fanout_tree_nodes,

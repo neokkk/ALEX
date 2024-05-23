@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include <vector>
 #include "alex_base.h"
 #include "bitmap.h"
 
@@ -1303,7 +1302,6 @@ public:
       search_iters_accumulator.accumulate(it.cur_idx_, predicted_position);
       shifts_accumulator.accumulate(it.cur_idx_, predicted_position);
     }
-
     expected_avg_exp_search_iterations_ = search_iters_accumulator.get_stat();
     expected_avg_shifts_ = shifts_accumulator.get_stat();
     double cost =
@@ -1762,6 +1760,7 @@ public:
     }
 
     initialize(num_actual_keys, kMinDensity);
+
     if (num_actual_keys == 0) {
       expansion_threshold_ = data_capacity_;
       contraction_threshold_ = 0;

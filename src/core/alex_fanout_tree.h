@@ -36,7 +36,8 @@ struct FTNode {
 
 // Collect all used fanout tree nodes and sort them
 inline void collect_used_nodes(const std::vector<std::vector<FTNode>> &fanout_tree,
-                        int max_level, std::vector<FTNode> &used_fanout_tree_nodes) {
+                        int max_level,
+                        std::vector<FTNode> &used_fanout_tree_nodes) {
   max_level = std::min(max_level, static_cast<int>(fanout_tree.size()) - 1);
   for (int i = 0; i <= max_level; i++) {
     auto &level = fanout_tree[i];
@@ -47,7 +48,8 @@ inline void collect_used_nodes(const std::vector<std::vector<FTNode>> &fanout_tr
     }
   }
 
-  std::sort(used_fanout_tree_nodes.begin(), used_fanout_tree_nodes.end(),
+  std::sort(used_fanout_tree_nodes.begin(),
+    used_fanout_tree_nodes.end(),
     [&](FTNode &left, FTNode &right) {
       // this is better than comparing boundary locations
       return (left.node_id << (max_level - left.level)) <
@@ -59,8 +61,13 @@ inline void collect_used_nodes(const std::vector<std::vector<FTNode>> &fanout_tr
 // upwards if doing so decreases the cost.
 // Returns the new best cost.
 // This is a helper function for finding the best fanout in a bottom-up fashion.
-template <class T, class P>
-static double merge_nodes_upwards(int start_level, double best_cost, int num_keys, int total_keys, std::vector<std::vector<FTNode>> &fanout_tree) {
+template<class T, class P>
+static double merge_nodes_upwards(
+    int start_level,
+    double best_cost,
+    int num_keys,
+    int total_keys,
+    std::vector<std::vector<FTNode>> &fanout_tree) {
   for (int level = start_level; level >= 1; level--) {
     int level_fanout = 1 << level;
     bool at_least_one_merge = false;
