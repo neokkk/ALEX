@@ -39,6 +39,8 @@ typedef unsigned __int32 uint32_t;
 #include <stdint.h>
 #endif
 
+#include "../utils/bitmap.h"
+
 #ifdef _MSC_VER
 #define forceinline __forceinline
 #elif defined(__GNUC__)
@@ -89,7 +91,7 @@ public:
 template <class T>
 class LinearModelBuilder {
 public:
-  LinearModel<T> *model_;
+  LinearModel<T>* model_;
 
   explicit LinearModelBuilder<T>(LinearModel<T> *model) : model_(model) {}
 
@@ -186,8 +188,6 @@ inline int get_offset(int word_id, uint64_t bit) {
 }
 
 static const uint8_t byte = 8;
-
-/*** Resizing densities ***/
 
 double kInitDensity = 1; // density of data nodes after bulk loading
 double kMinDensity = 1; // density after expanding, also

@@ -710,9 +710,9 @@ public:
     DataNodeStats stats;
 
     root_node_->cost_ = data_node_type::compute_expected_cost(
-      values, num_keys, kInitDensity,
-      params_.expected_insert_frac, &root_data_node_model,
-      params_.approximate_cost_computation, &stats);
+        values, num_keys, kInitDensity,
+        params_.expected_insert_frac, &root_data_node_model,
+        params_.approximate_cost_computation, &stats);
 
     // Recursively bulk load
     bulk_load_node(values, num_keys, root_node_, num_keys, &root_data_node_model);
@@ -776,10 +776,8 @@ private:
                       int total_keys, const LinearModel<T> *data_node_model = nullptr) {
     // Automatically convert to data node when it is impossible to be better
     // than current cost
-    // std::cout << "node cost: " << node->cost_ << ", slope: " << node->model_.a_ << ", intercept: " << node->model_.b_ << std::endl;
     if (num_keys <= derived_params_.max_data_node_slots * kInitDensity &&
-      (node->cost_ < kNodeLookupsWeight || node->model_.a_ == 0)) {
-      // std::cout << "bulk_load_node: convert to data node 1" << std::endl;
+        (node->cost_ < kNodeLookupsWeight || node->model_.a_ == 0)) {
       stats_.num_data_nodes++;
       std::cout << "num_keys: " << num_keys << ", derived_params_.max_data_node_slots * kInitDensity: " << derived_params_.max_data_node_slots * kInitDensity << std::endl;
       auto data_node = new (data_node_allocator().allocate(1)) data_node_type(node->level_, derived_params_.max_data_node_slots, key_less_, allocator_);
@@ -797,7 +795,7 @@ private:
 
     if (experimental_params_.fanout_selection_method == 0) {
       int max_data_node_keys = static_cast<int>(
-        derived_params_.max_data_node_slots * kInitDensity);
+          derived_params_.max_data_node_slots * kInitDensity);
       best_fanout_stats = fanout_tree::find_best_fanout_bottom_up<T, P>(
         values, num_keys, node, total_keys, used_fanout_tree_nodes,
         derived_params_.max_fanout, max_data_node_keys,
@@ -831,7 +829,6 @@ private:
         // in expectation
         best_fanout_tree_depth = static_cast<int>(std::log2(static_cast<double>(num_keys) / derived_params_.max_data_node_slots)) + 1;
         used_fanout_tree_nodes.clear();
-
         int max_data_node_keys = static_cast<int>(derived_params_.max_data_node_slots * kInitDensity);
         fanout_tree::compute_level<T, P>(
           values, num_keys, node, total_keys, used_fanout_tree_nodes,

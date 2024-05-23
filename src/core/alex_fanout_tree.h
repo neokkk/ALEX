@@ -161,10 +161,9 @@ double compute_level(const std::pair<T, P> values[], int num_keys,
     DataNodeStats stats;
 
     double node_cost = AlexDataNode<T, P>::compute_expected_cost(
-      values + left_boundary, right_boundary - left_boundary,
-      kInitDensity, expected_insert_frac, &model,
-      approximate_cost_computation, &stats);
-
+        values + left_boundary, right_boundary - left_boundary,
+        kInitDensity, expected_insert_frac, &model,
+        approximate_cost_computation, &stats);
     // If the node is too big to be a data node, proactively incorporate an
     // extra tree traversal level into the cost.
     if (right_boundary - left_boundary > max_data_node_keys) {
@@ -314,9 +313,9 @@ std::pair<int, double> find_best_fanout_top_down(
                                         approximate_model_computation);
 
         node_costs[i] = AlexDataNode<T, P>::compute_expected_cost(
-          values + left, right - left, kInitDensity,
-          expected_insert_frac, &node_models[i], approximate_cost_computation,
-          &node_stats[i]);
+            values + left, right - left, kInitDensity,
+            expected_insert_frac, &node_models[i], approximate_cost_computation,
+            &node_stats[i]);
       }
       node_split_cost += sizeof(AlexDataNode<T, P>) * kModelSizeWeight * total_keys / num_node_keys;
 
@@ -421,9 +420,10 @@ find_best_fanout_existing_node(const AlexModelNode<T, P> *parent,
       double empirical_insert_frac = node->frac_inserts();
       DataNodeStats stats;
       double node_cost =
-        AlexDataNode<T, P>::compute_expected_cost_from_existing(
-          node, left_boundary, right_boundary,
-          kInitDensity, empirical_insert_frac, &model, &stats);
+          AlexDataNode<T, P>::compute_expected_cost_from_existing(
+              node, left_boundary, right_boundary,
+              kInitDensity, empirical_insert_frac, &model,
+              &stats);
 
       cost += node_cost * num_actual_keys / num_keys;
 

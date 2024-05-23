@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <vector>
 #include "alex_base.h"
 #include "bitmap.h"
 
@@ -81,10 +82,10 @@ public:
   // Array of pointers to children
   AlexNode<T, P> **children_ = nullptr;
 
-  explicit AlexModelNode(const Alloc& alloc = Alloc())
+  explicit AlexModelNode(const Alloc &alloc = Alloc())
     : AlexNode<T, P>(0, false), allocator_(alloc) {}
 
-  explicit AlexModelNode(short level, const Alloc& alloc = Alloc())
+  explicit AlexModelNode(short level, const Alloc &alloc = Alloc())
     : AlexNode<T, P>(level, false), allocator_(alloc) {}
 
   ~AlexModelNode() {
@@ -103,7 +104,7 @@ public:
   }
 
   // Given a key, traverses to the child node responsible for that key
-  inline AlexNode<T, P> *get_child_node(const T &key) {
+  inline AlexNode<T, P>* get_child_node(const T &key) {
     int bucketID = this->model_.predict(key);
     bucketID = std::min<int>(std::max<int>(bucketID, 0), num_children_ - 1);
     return children_[bucketID];
@@ -125,8 +126,8 @@ public:
     while (cur < num_children_) {
       AlexNode<T, P> *cur_child = children_[cur];
       int cur_child_repeats = 1 << cur_child->duplication_factor_;
-
-      for (int i = expansion_factor * cur; i < expansion_factor * (cur + cur_child_repeats); i++) {
+      for (int i = expansion_factor * cur;
+          i < expansion_factor * (cur + cur_child_repeats); i++) {
         new_children[i] = cur_child;
       }
       cur_child->duplication_factor_ += log2_expansion_factor;
@@ -307,6 +308,7 @@ template <class T, class P, class Compare = AlexCompare,
 class AlexDataNode : public AlexNode<T, P> {
 public:
   class AlexDataBuffer;
+  typedef int8_t order_t;
   typedef std::pair<T, P> V;
   typedef int8_t order_t;
   typedef AlexDataNode<T, P, Compare, Alloc, allow_duplicates> self_type;
@@ -327,8 +329,15 @@ public:
   self_type *next_leaf_ = nullptr;
   self_type *prev_leaf_ = nullptr;
 
-  int data_capacity_ = 0;  // size of buffer
-  int num_keys_ = 0;  // number of filled buffer slots
+#if ALEX_DATA_NODE_SEP_ARRAYS
+  T *key_slots_ = nullptr;  // holds keys
+  P *payload_slots_ = nullptr;  // holds payloads, must be same size as key_slots
+#else
+  V *data_slots_ = nullptr;  // holds key-payload pairs
+#endif
+
+  int data_capacity_ = 0;  // size of key/data_slots array
+  int num_keys_ = 0;  // number of filled key/data slots (as opposed to gaps)
 
   // Bitmap: each uint64_t represents 64 positions in reverse order
   // (i.e., each uint64_t is "read" from the right-most bit to the left-most
@@ -336,7 +345,7 @@ public:
   uint64_t *bitmap_ = nullptr;
   int bitmap_size_ = 0;  // number of int64_t in bitmap
 
-  AlexDataBuffer **buffer_ = nullptr;
+  std::vector<AlexDataBuffer *> buffer_;
 
   double expansion_threshold_ = 1;  // expand after m_num_keys is >= this number
   double contraction_threshold_ = 0;  // contract after m_num_keys is < this number
@@ -372,30 +381,17 @@ public:
   static constexpr T kEndSentinel_ = std::numeric_limits<T>::max();
 
   class AlexDataBuffer {
-    typedef typename Alloc::template rebind<T>::other key_alloc_type;
-    typedef typename Alloc::template rebind<P>::other payload_alloc_type;
-    typedef typename Alloc::template rebind<V>::other value_alloc_type;
-    typedef typename Alloc::template rebind<order_t>::other order_alloc_type;
-  
   public:
     AlexDataNode *node_;
 
-  #if ALEX_DATA_NODE_SEP_ARRAYS
-    T *key_slots_ = nullptr;  /// holds keys
-    P *payload_slots_ = nullptr;  /// holds payloads, must be same size as key_slots
-  #else
-    V *data_slots_ = nullptr;  /// holds key-payload pairs
-  #endif
+    std::vector<T> key_slots_;
+    std::vector<P> payload_slots_;
+    std::vector<order_t> order_;
+    uint16_t delete_bitmap_ = 0;
 
-    order_t *order_slots_ = nullptr;  /// order of keys in key/data_slots
+    order_t min_idx = 0;
+    order_t max_idx = 0;
 
-    uint64_t *delete_bitmap_ = nullptr;
-
-    order_t count = 0; /// number of keys in key/data_slots
-    order_t min_idx = 0; /// index of the minimum key in key/data_slots
-                         /// start point for sorted lookups
-    order_t max_idx = 0; /// index of the maximum key in key/data_slots
-                         /// end point for sorted lookups
     uint8_t current_collision_factor = 2; /// 2, 3, 4
   
     static constexpr uint8_t kMaxCollisionFactor = 4;
@@ -408,121 +404,25 @@ public:
       initialize();
       key_slots_[0] = key;
       payload_slots_[0] = payload;
-      order_slots_[0] = -1;
-      count++;
+      order_[0] = -1;
     }
 
-    virtual ~AlexDataBuffer() {
-      auto size = 1 << current_collision_factor;
+    virtual ~AlexDataBuffer() = default;
 
-    #if ALEX_DATA_NODE_SEP_ARRAYS
-      if (key_slots_ == nullptr) {
-        return;
-      }
-      key_allocator().deallocate(key_slots_, size);
-      payload_allocator().deallocate(payload_slots_, size);
-    #else
-      if (data_slots_ == nullptr) {
-        return;
-      }
-      value_allocator().deallocate(data_slots_, size);
-    #endif
-      order_allocator().deallocate(order_slots_, size);
-      auto bitmap_size = static_cast<size_t>(std::ceil(size / 64.));
-      node_->bitmap_allocator().deallocate(delete_bitmap_, bitmap_size);
-    }
-
-private:
+  private:
     void initialize() {
       auto size = 1 << current_collision_factor;
 
-    #if ALEX_DATA_NODE_SEP_ARRAYS
-      key_slots_ = new (key_allocator().allocate(size)) T[size];
-      payload_slots_ = new (payload_allocator().allocate(size)) P[size];
-    #else
-      data_slots_ = new (value_allocator().allocate(size)) V[size];
-    #endif
-      order_slots_ = new (order_allocator().allocate(size)) order_t[size](); /// initialize to 0
+      key_slots_.reserve(size);
+      payload_slots_.reserve(size);
+      order_.reserve(size);
 
-      auto bitmap_size = static_cast<size_t>(std::ceil(size / 64.));
-      delete_bitmap_ = new (node_->bitmap_allocator().allocate(bitmap_size)) uint64_t[bitmap_size]();
+      std::fill(order_.begin(), order_.end(), -1);
     }
 
-    /*** Allocators ***/
-
-    key_alloc_type key_allocator() {
-      return key_alloc_type(node_->allocator_);
-    }
-
-    payload_alloc_type payload_allocator() {
-      return payload_alloc_type(node_->allocator_);
-    }
-
-  #if ALEX_DATA_NODE_SEP_ARRAYS
-    value_alloc_type value_allocator() {
-      return value_alloc_type(node_->allocator_);
-    }
-  #endif
-
-    order_alloc_type order_allocator() {
-      return order_alloc_type(node_->allocator_);
-    }
-
-public:
-    /*** General helper functions ***/
-
-    inline T get_key(int8_t pos = 0) const {
-      if (count == 0) return std::numeric_limits<T>::max();
-      return key_slots_[pos];
-    }
-
-    inline T *get_keys() const {
-      if (count == 0) return nullptr;
-      return key_slots_;
-    }
-
-    inline T get_min_key() const {
-      if (count == 0) return std::numeric_limits<T>::min();
-      return key_slots_[min_idx];
-    }
-
-    inline T get_max_key() const {
-      if (count == 0) return std::numeric_limits<T>::max();
-      return key_slots_[max_idx];
-    }
-
-    inline P *get_payload(int8_t pos = 0) const {
-      if (count == 0) return nullptr;
-      return &(payload_slots_[pos]);
-    }
-
-    inline P *get_payloads() const {
-      if (count == 0) return nullptr;
-      return payload_slots_;
-    }
-
-  #if !ALEX_DATA_NODE_SEP_ARRAYS
-    inline V get_data() const {
-      if (count == 0) return std::make_pair(std::numeric_limits<T>::max(), nullptr);
-      return data_slots_[0];
-    }
-
-    inline V *get_datas() const {
-      if (count == 0) return nullptr;
-      return data_slots_;
-    }
-  #endif
-
-    void delete_key(int8_t pos) {
-      int bitmap_pos = pos >> 6;
-      if (bitmap_pos >= (1 << current_collision_factor)) {
-        return;
-      }
-      int bit_pos = pos - (bitmap_pos << 6);
-      delete_bitmap_[bitmap_pos] = delete_bitmap_[bitmap_pos] | (1ULL << bit_pos);
-    }
-
+  public:
     bool is_full() {
+      auto count = size();
       return count == (1 << current_collision_factor);
     }
 
@@ -533,31 +433,27 @@ public:
       );
     }
 
-    int num_keys_in_range(const T &left, const T &right) const {
-      int num_keys = 0;
-      int start_pos = find_lower_bound(left);
-      start_pos = key_slots_[start_pos] == left ? start_pos : start_pos + 1; /// greater equal than left
-      order_t next_order = order_slots_[start_pos];
-      int next_key = next_order == -1 ? right : next_order;
-
-      while (next_key != right) {
-        num_keys++;
-        next_order = order_slots_[next_key];
-        next_key = next_order == -1 ? right : next_order;
-      }
-
-      return num_keys;
-    }
-
-    order_t size() {
-      return count;
+    size_t size() {
+      return key_slots_.size();
     }
 
     size_t capacity() {
       return 1 << current_collision_factor;
     }
 
-    int find_idx(T key) {
+    bool get_bit(int pos) {
+      return delete_bitmap_ & (1 << pos);
+    }
+
+    void set_bit(int pos) {
+      delete_bitmap_ |= (1 << pos);
+    }
+
+    void unset_bit(int pos) {
+      delete_bitmap_ &= ~(1 << pos);
+    }
+
+    int find_idx(T key, bool use_simd = false) {
       int size = 1 << current_collision_factor;
 
       printf("count: %d\n", count);
@@ -567,45 +463,43 @@ public:
         return -1;
       }
 
-    #ifdef __AVX512F__
-      std::cout << "simd lookup" << std::endl;
-      const int unit_count = 512 / (sizeof(T) * byte);
-      const int vec_size = size / unit_count;
-      int i = 0;
-      __m512i vkey = _mm512_set1_epi64(key);
+      if (use_simd) {
+        std::cout << "simd lookup" << std::endl;
+        const int unit_count = 512 / (sizeof(T) * byte);
+        const int vec_size = size / unit_count;
+        int i = 0;
+        __m512i vkey = _mm512_set1_epi64(key);
 
-      for (; i < vec_size; i++) {
-        __m512i vkeys = _mm512_loadu_epi64(&key_slots_[i * unit_count]);
-        __mmask16 mask = _mm512_cmpeq_epi64_mask(vkeys, vkey);
+        for (; i < vec_size; i++) {
+          __m512i vkeys = _mm512_loadu_epi64(&key_slots_[i * unit_count]);
+          __mmask16 mask = _mm512_cmpeq_epi64_mask(vkeys, vkey);
 
-        if (mask != 0) { /// If any keys match
-          int match_key = _tzcnt_u64(mask) + i; /// Find the index of the first match
-          __m512i match_vec = _mm512_set1_epi64(match_key);
-          __mmask16 match_mask = _mm512_cmpeq_epi64_mask(vkeys, match_vec);
-          int match_idx = __tzcnt_u64(match_mask) + i * unit_count;
-          return match_idx;
+          if (mask != 0) { /// If any keys match
+            int match_key = _tzcnt_u64(mask) + i; /// Find the index of the first match
+            __m512i match_vec = _mm512_set1_epi64(match_key);
+            __mmask16 match_mask = _mm512_cmpeq_epi64_mask(vkeys, match_vec);
+            int match_idx = __tzcnt_u64(match_mask) + i * unit_count;
+            return match_idx;
+          }
         }
-      }
 
-      /// Handle remaining elements
-      for (int j = i * unit_count; j < size; j++) {
-        if (node_->key_equal(key, key_slots_[j])) {
-          return j;
+        /// Handle remaining elements
+        for (int j = i * unit_count; j < size; j++) {
+          if (node_->key_equal(key, key_slots_[j])) {
+            return j;
+          }
         }
-      }
-    #else
-      for (int i = 0; i < count; i++) {
-        if (node_->key_equal(key, key_slots_[i])) {
-          return i;
-        }
-      }
-    #endif
-      
-      return -1;
-    }
+      } else {
+        auto it = std::find_if(key_slots_.begin(), key_slots_.end(), [&](T k) {
+          return node_->key_equal(key, k);
+        });
 
-    bool key_exists(T key) {
-      return find_idx(key) != -1;
+        if (it != key_slots_.end()) {
+          return std::distance(key_slots_.begin(), it);
+        }
+
+        return -1;
+      }
     }
 
     P *lookup(T key) {
@@ -639,26 +533,24 @@ public:
 
       if (node_->key_less(key, key_slots_[min_idx])) {
         std::cout << "key is less than min" << std::endl;
-        order_slots_[pos] = min_idx;
+        order_[pos] = min_idx;
         min_idx = pos;
       } else if (node_->key_less(key_slots_[max_idx], key)) {
         std::cout << "key is greater than max" << std::endl;
-        order_slots_[max_idx] = pos;
+        order_[max_idx] = pos;
         max_idx = pos;
-        order_slots_[pos] = -1; /// update max to -1
+        order_[pos] = -1; /// update max to -1
       } else { /// TODO: concurrent control
         std::cout << "key is in the middle" << std::endl;
         auto order_idx = find_last_no_greater_than(key, true);
-        order_slots_[pos] = order_slots_[order_idx];
-        order_slots_[order_idx] = pos;
+        order_[pos] = order_[order_idx];
+        order_[order_idx] = pos;
       }
 
       for (int i = 0; i <= pos; i++) {
-        printf("%d ", i, order_slots_[i]);
+        printf("%d ", i, order_[i]);
       }
       printf("\n");
-
-      count++;
 
       return true;
     }
@@ -773,7 +665,6 @@ public:
         return false;
       }
 
-      int prev_size = 1 << current_collision_factor;
       current_collision_factor++;
       int size = 1 << current_collision_factor;
       std::cout << "buffer expanded to " << size << std::endl;
@@ -781,180 +672,154 @@ public:
       if (size > 8) {
         compress(); /// compress before expand
       }
-      expand_without_compress(size, prev_size);
+      expand_without_compress(size);
 
       return true;
     }
 
-    bool expand_without_compress(int size, int prev_size) {
-    #if ALEX_DATA_NODE_SEP_ARRAYS
-      auto new_key_slots = new (key_allocator().allocate(size)) T[size];
-      memcpy(new_key_slots, key_slots_, prev_size * sizeof(T));
-      key_allocator().deallocate(key_slots_, prev_size);
-      key_slots_ = new_key_slots;
-
-      auto new_payload_slots = new (payload_allocator().allocate(size)) P[size];
-      memcpy(new_payload_slots, payload_slots_, prev_size * sizeof(P));
-      payload_allocator().deallocate(payload_slots_, prev_size);
-      payload_slots_ = new_payload_slots;
-    #else
-      auto new_data_slots = new (value_allocator().allocate(size)) V[size];
-      memcpy(new_data_slots, data_slots_, prev_size * sizeof(V));
-      value_allocator().deallocate(data_slots_, prev_size);
-      data_slots_ = new_data_slots;
-    #endif
-
-      auto new_order_slots = new (order_allocator().allocate(size)) order_t[size]();
-      memcpy(new_order_slots, order_slots_, prev_size * sizeof(order_t));
-      order_allocator().deallocate(order_slots_, prev_size);
-      order_slots_ = new_order_slots;
-
-      auto bitmap_size = static_cast<size_t>(std::ceil(size / 64.));
-      auto new_delete_bitmap = new (node_->bitmap_allocator().allocate(bitmap_size)) uint64_t[bitmap_size]();
-      memcpy(new_delete_bitmap, delete_bitmap_, bitmap_size);
-      node_->bitmap_allocator().deallocate(delete_bitmap_, bitmap_size);
-      delete_bitmap_ = new_delete_bitmap;
-
-      return true;
-    }
-
-    int compress() {
+    int compress(bool use_simd = false) {
       auto size = 1 << current_collision_factor;
-      uint16_t delete_bits = static_cast<uint16_t>(*delete_bitmap_ >> (64 - size));
-      int popcount = __builtin_popcount(delete_bits);
-      uint16_t mask = ~delete_bits << (16 - size);
+      int pop_count = __builtin_popcount(delete_bitmap_);
+      uint16_t mask = ~delete_bitmap_;
       T min_key = std::numeric_limits<T>::max(), max_key = std::numeric_limits<T>::min();
       int min_key_idx = 0;
 
       assert(size > 8);
 
-      if (popcount == 0) {
+      if (pop_count == 0) {
         return 0;
       }
 
-      if (popcount == size) {
-        auto bitmap_size = static_cast<size_t>(std::ceil(size / 64.));
-        memset(delete_bitmap_, 0, bitmap_size);
-        memset(order_slots_, 0, size * sizeof(order_t));
-        count = 0;
+      if (pop_count == size) {
+        key_slots_.clear();
+        payload_slots_.clear();
+        std::fill(order_.begin(), order_.end(), -1);
+        delete_bitmap_ = 0;
         min_idx = 0;
         max_idx = 0;
         return size;
       }
 
-    #if ALEX_DATA_NODE_SEP_ARRAYS
-      int key_vec_size = sizeof(T) * size / 64;
-      int payload_vec_size = sizeof(P) * size / 64;
-      std::cout << "key_vec_size: " << key_vec_size << ", payload_vec_size: " << payload_vec_size << std::endl;
-      int last_key_attr = 0, last_payload_addr = 0;
+      if (use_simd) {
+        int key_unit_count = 512 / (sizeof(T) * byte);
+        int key_vec_size = std::ceil(size / key_unit_count);
+        int payload_unit_count = 512 / (sizeof(P) * byte);
+        int payload_vec_size = std::ceil(size / payload_unit_count);
+        std::cout << "key_vec_size: " << key_vec_size << ", payload_vec_size: " << payload_vec_size << std::endl;
+        __mmask16 key_mask = mask, payload_mask = mask;
 
-      for (int i = 0; i < key_vec_size; ++i) {
-        int right_shift = size / key_vec_size * (key_vec_size - i - 1);
-        __mmask16 key_mask = reverse_bits(mask >> right_shift) & (1 << (size / key_vec_size) - 1);
-        size_t valid_key_count = __builtin_popcount(key_mask);
+        for (int i = 0; i < key_vec_size; ++i) {
+          key_mask = key_mask & (1 << key_unit_count - 1);
+          size_t valid_key_count = __builtin_popcount(key_mask);
 
-        if (valid_key_count == 0) {
-          continue;
+          if (valid_key_count == 0) { /// no compress keys
+            continue;
+          }
+
+          __m512i key_vec = _mm512_load_epi64(&key_slots_[i * key_unit_count]);
+          __m512i key_res_vec = _mm512_maskz_compress_epi64(key_mask, key_vec);
+
+          int min_key_ = reduce_min_exclude_zero_SIMD(key_res_vec);
+          if (min_key_ < min_key) {
+            min_key = min_key_;
+            __m512i min_vec = _mm512_set1_epi64(min_key_);
+            __mmask16 min_mask = _mm512_cmpeq_epi64_mask(key_res_vec, min_vec);
+            min_key_idx = __tzcnt_u64(min_mask);
+          }
+
+          auto it = key_slots_.begin() + i * key_unit_count;
+          std::copy_if(it, it + key_unit_count, it, [&](T k) {
+            return k != 0; /// filter out zero keys
+          });
+
+          key_mask >>= key_unit_count;
+        }
+        std::cout << "min_key: " << min_key << std::endl;
+        
+        for (int i = 0; i < payload_vec_size; ++i) {
+          payload_mask = payload_mask & (1 << payload_unit_count - 1);
+          size_t valid_payload_count = __builtin_popcount(payload_mask);
+
+          if (valid_payload_count == 0) {
+            continue;
+          }
+
+          __m512i payload_vec = _mm512_load_epi64(payload_slots_ + i * byte * sizeof(P));
+          __m512i payload_res_vec = _mm512_maskz_compress_epi64(payload_mask, payload_vec);
+
+          auto it = payload_slots_.begin() + i * payload_unit_count;
+          std::copy_if(it, it + payload_unit_count, it, [&](P p) {
+            return p != 0; /// filter out zero payloads
+          });
+
+          payload_mask >>= payload_unit_count;
         }
 
-        __m512i key_vec = _mm512_load_epi64(key_slots_ + i * byte * sizeof(T));
-        __m512i key_res_vec = _mm512_maskz_compress_epi64(key_mask, key_vec);
+        /* Update order */
 
-        int min_key_ = reduce_min_exclude_zero_SIMD(key_res_vec);
-        if (min_key_ < min_key) {
-          min_key = min_key_;
-          __m512i min_vec = _mm512_set1_epi64(min_key_);
-          __mmask16 min_mask = _mm512_cmpeq_epi64_mask(key_res_vec, min_vec);
-          min_key_idx = __tzcnt_u64(min_mask);
+        order_.clear();     
+        min_idx = min_key_idx;
+
+        order_t match_idx;
+
+        for (int i = 0; i < size - 1; i++) {
+          match_idx = find_first_greater_than(key_slots_[min_key_idx], true);
+          order_[min_key_idx] = match_idx;
+          min_key_idx = match_idx;
         }
 
-        auto key_res = (T *)&key_res_vec;
-
-        memcpy(key_slots_ + last_key_attr, key_res, valid_key_count * sizeof(T));
-        last_key_attr += valid_key_count * sizeof(T);
-      }
-      std::cout << "min_key: " << min_key << ", max_key: " << max_key << std::endl;
-      
-      for (int i = 0; i < payload_vec_size; ++i) {
-        int right_shift = size / payload_vec_size * (payload_vec_size - i - 1);
-        __mmask16 payload_mask = reverse_bits(mask >> right_shift) & (1 << (size / payload_vec_size) - 1);
-        size_t valid_payload_count = __builtin_popcount(payload_mask);
-
-        if (valid_payload_count == 0) {
-          continue;
-        }
-
-        __m512i payload_vec = _mm512_load_epi64(payload_slots_ + i * byte * sizeof(P));
-        __m512i payload_res_vec = _mm512_maskz_compress_epi64(payload_mask, payload_vec);
-        auto payload_res = (P *)&payload_res_vec;
-
-        memcpy(payload_slots_ + last_payload_addr, payload_res, valid_payload_count * sizeof(P));
-        last_payload_addr += valid_payload_count * sizeof(P);
-      }
-
-    #else
-      int value_vec_size = sizeof(V) * size / 64;
-      int last_data_addr = 0;
-
-      for (int i = 0; i < value_vec_size; ++i) {
-        int right_shift = size / value_vec_size * (value_vec_size - i - 1);
-        __mmask16 value_mask = reverse_bits(mask >> right_shift) & (1 << (size / value_vec_size) - 1);
-        size_t valid_value_count = __builtin_popcount(value_mask);
-
-        if (valid_value_count == 0) {
-          continue;
-        }
-
-        __mm512i value_vec = _mm512_load_epi64(data_slots_ + i * byte * sizeof(V));
-        __mm512i value_res_vec = _mm512_maskz_compress_epi64(value_mask, value_vec);
-        auto value_res = (V *)&value_res_vec;
-
-        memcpy(data_slots_ + last_data_addr, value_res, valid_value_count * sizeof(V));
-        last_data_addr += valid_value_count * sizeof(V);
-      }
-    #endif
-
-      count = size - popcount;
-
-      /* Update order */
-
-      memset(order_slots_, 0, size * sizeof(order_t));
-      min_idx = min_key_idx;
-
-      order_t match_idx;
-
-      for (int i = 0; i < size - 1; i++) {
         match_idx = find_first_greater_than(key_slots_[min_key_idx], true);
-        order_slots_[min_key_idx] = match_idx;
-        min_key_idx = match_idx;
+        order_[min_key_idx] = match_idx;
+        order_[match_idx] = -1;
+        max_idx = match_idx;
+
+        /*** Initial bitmap ***/
+
+        delete_bitmap_ = 0;
+
+        return pop_count;
+      } else {
+        std::vector<T> keys;
+        std::vector<P> payloads;
+        std::vector<order_t> orders;
+
+        for (int i = 0; i < size; i++) {
+          if (get_bit(i)) {
+            continue;
+          }
+
+          keys.push_back(key_slots_[i]);
+          payloads.push_back(payload_slots_[i]);
+          orders.push_back(order_[i]);
+        }
+
+        key_slots_ = keys;
+        payload_slots_ = payloads;
+        order_ = orders;
+        delete_bitmap_ = 0;
+
+        return pop_count;
       }
-
-      match_idx = find_first_greater_than(key_slots_[min_key_idx], true);
-      order_slots_[min_key_idx] = match_idx;
-      order_slots_[match_idx] = -1;
-      max_idx = match_idx;
-
-      /*** Initial bitmap ***/
-
-      auto bitmap_size = static_cast<size_t>(std::ceil(size / 64.));
-      memset(delete_bitmap_, 0, bitmap_size);
-
-      return popcount;
     }
 
-    double utilization() {
-      return count / (1 << current_collision_factor);
+    bool expand_without_compress(int size) {
+      key_slots_.resize(size);
+      payload_slots_.resize(size);
+      order_.resize(size);
+      return true;
     }
 
-    void print() {
-      for (int i = 0; i < count; i++) {
-        std::cout << key_slots_[i] << " ";
-      }
+    int reduce_min_exclude_zero_SIMD(__m512i &vec) {
+      __m512i zero_vec = _mm512_setzero_si512();
+      __mmask16 mask = _mm512_cmp_epi64_mask(vec, zero_vec, _MM_CMPINT_NE);
+      __m512i min_vec = _mm512_mask_reduce_min_epi64(mask, vec);
+      return _mm512_reduce_min_epi64(min_vec);
     }
   };
 
   /*** Constructors and destructors ***/
 
+public:
   explicit AlexDataNode(const Compare &comp = Compare(), const Alloc &alloc = Alloc())
     : AlexNode<T, P>(0, true), key_less_(comp), allocator_(alloc) {}
 
@@ -994,8 +859,10 @@ public:
       min_key_(other.min_key_),
       num_right_out_of_bounds_inserts_(other.num_right_out_of_bounds_inserts_),
       num_left_out_of_bounds_inserts_(other.num_left_out_of_bounds_inserts_),
-      expected_avg_exp_search_iterations_(other.expected_avg_exp_search_iterations_),
       expected_avg_shifts_(other.expected_avg_shifts_) {
+    bitmap_ = new (bitmap_allocator().allocate(other.bitmap_size_))
+      uint64_t[other.bitmap_size_];
+    std::copy(other.bitmap_, other.bitmap_ + other.bitmap_size_, bitmap_);
   }
 
     /*** Allocators ***/
@@ -1004,9 +871,17 @@ public:
       return bitmap_alloc_type(allocator_);
     }
 
-    buffer_alloc_type buffer_allocator() {
-      return buffer_alloc_type(allocator_);
-    }
+  payload_alloc_type payload_allocator() { return payload_alloc_type(allocator_); }
+
+  value_alloc_type value_allocator() { return value_alloc_type(allocator_); }
+
+  bitmap_alloc_type bitmap_allocator() { return bitmap_alloc_type(allocator_); }
+
+  /*** General helper functions ***/
+
+  inline T &get_key(int pos) const { return ALEX_DATA_NODE_KEY_AT(pos); }
+
+  inline P &get_payload(int pos) const { return ALEX_DATA_NODE_PAYLOAD_AT(pos); }
 
   // Check whether the position corresponds to a key (as opposed to a gap)
   inline bool check_exists(int pos) const {
@@ -1080,9 +955,28 @@ public:
     int num_keys = 0;
     int left_bitmap_idx = left >> 6;
     int right_bitmap_idx = right >> 6;
-    
-    for (int i = left_bitmap_idx; i <= right_bitmap_idx; i = get_next_filled_buffer(i, true)) {
-      num_keys += buffer_[i]->size();
+
+    if (left_bitmap_idx == right_bitmap_idx) {
+      uint64_t bitmap_data = bitmap_[left_bitmap_idx];
+      int left_bit_pos = left - (left_bitmap_idx << 6);
+      bitmap_data &= ~((1ULL << left_bit_pos) - 1);
+      int right_bit_pos = right - (right_bitmap_idx << 6);
+      bitmap_data &= ((1ULL << right_bit_pos) - 1);
+      num_keys += _mm_popcnt_u64(bitmap_data);
+    } else {
+      uint64_t left_bitmap_data = bitmap_[left_bitmap_idx];
+      int bit_pos = left - (left_bitmap_idx << 6);
+      left_bitmap_data &= ~((1ULL << bit_pos) - 1);
+      num_keys += _mm_popcnt_u64(left_bitmap_data);
+      for (int i = left_bitmap_idx + 1; i < right_bitmap_idx; i++) {
+        num_keys += _mm_popcnt_u64(bitmap_[i]);
+      }
+      if (right_bitmap_idx != bitmap_size_) {
+        uint64_t right_bitmap_data = bitmap_[right_bitmap_idx];
+        bit_pos = right - (right_bitmap_idx << 6);
+        right_bitmap_data &= ((1ULL << bit_pos) - 1);
+        num_keys += _mm_popcnt_u64(right_bitmap_data);
+      }
     }
     
     return num_keys;
@@ -1098,31 +992,31 @@ public:
 
   // True if a < b
   template <class K>
-  forceinline bool key_less(const T &a, const K &b) const {
+  forceinline bool key_less(const T &a, const K& b) const {
     return key_less_(a, b);
   }
 
   // True if a <= b
   template <class K>
-  forceinline bool key_lessequal(const T &a, const K &b) const {
+  forceinline bool key_lessequal(const T &a, const K& b) const {
     return !key_less_(b, a);
   }
 
   // True if a > b
   template <class K>
-  forceinline bool key_greater(const T &a, const K &b) const {
+  forceinline bool key_greater(const T &a, const K& b) const {
     return key_less_(b, a);
   }
 
   // True if a >= b
   template <class K>
-  forceinline bool key_greaterequal(const T &a, const K &b) const {
+  forceinline bool key_greaterequal(const T &a, const K& b) const {
     return !key_less_(a, b);
   }
 
   // True if a == b
   template <class K>
-  forceinline bool key_equal(const T &a, const K &b) const {
+  forceinline bool key_equal(const T &a, const K& b) const {
     return !key_less_(a, b) && !key_less_(b, a);
   }
 
@@ -1160,7 +1054,7 @@ public:
   class Iterator {
   public:
     node_type *node_;
-    int cur_idx_ = 0;  // current position in buffer, -1 if at end
+    int cur_idx_ = 0;  // current position in key/data_slots, -1 if at end
     int cur_bitmap_idx_ = 0;  // current position in bitmap
     uint64_t cur_bitmap_data_ = 0;  // caches the relevant data in the current bitmap position
 
@@ -1196,8 +1090,23 @@ public:
       cur_bitmap_data_ = remove_rightmost_one(cur_bitmap_data_);
     }
 
-    AlexDataBuffer *operator*() const {
-      return node_->buffer_[cur_idx_];
+#if ALEX_DATA_NODE_SEP_ARRAYS
+    V operator*() const {
+      return std::make_pair(node_->key_slots_[cur_idx_],
+                            node_->payload_slots_[cur_idx_]);
+    }
+#else
+    value_return_type& operator*() const {
+      return node_->data_slots_[cur_idx_];
+    }
+#endif
+
+    const T &key() const {
+#if ALEX_DATA_NODE_SEP_ARRAYS
+      return node_->key_slots_[cur_idx_];
+#else
+      return node_->data_slots_[cur_idx_].first;
+#endif
     }
 
     AlexDataBuffer *buffer() const {
@@ -1296,12 +1205,12 @@ public:
     ExpectedSearchIterationsAccumulator search_iters_accumulator;
     ExpectedShiftsAccumulator shifts_accumulator(data_capacity_);
     const_iterator_type it(this, 0);
-    
     for (; !it.is_end(); it++) {
       int predicted_position = std::max(0, std::min(data_capacity_ - 1, this->model_.predict(it.key())));
       search_iters_accumulator.accumulate(it.cur_idx_, predicted_position);
       shifts_accumulator.accumulate(it.cur_idx_, predicted_position);
     }
+
     expected_avg_exp_search_iterations_ = search_iters_accumulator.get_stat();
     expected_avg_shifts_ = shifts_accumulator.get_stat();
     double cost =
@@ -1317,7 +1226,7 @@ public:
       const V *values, int num_keys, double density,
       double expected_insert_frac,
       const LinearModel<T> *existing_model = nullptr, bool use_sampling = false,
-      DataNodeStats *stats = nullptr) {
+      DataNodeStats* stats = nullptr) {
     if (use_sampling) {
       return compute_expected_cost_sampling(values, num_keys, density, expected_insert_frac, existing_model, stats);
     }
@@ -1368,7 +1277,7 @@ public:
   // Helper function for compute_expected_cost
   // Implicitly build the data node in order to collect the stats
   static void build_node_implicit(const V *values, int num_keys,
-                                  int data_capacity, StatAccumulator *acc,
+                                  int data_capacity, StatAccumulator* acc,
                                   const LinearModel<T> *model) {
     int last_position = -1;
     int keys_remaining = num_keys;
@@ -1400,10 +1309,10 @@ public:
   // Uses progressive sampling: keep increasing the sample size until the
   // computed stats stop changing drastically
   static double compute_expected_cost_sampling(
-    const V *values, int num_keys, double density,
-    double expected_insert_frac,
-    const LinearModel<T> *existing_model = nullptr,
-    DataNodeStats *stats = nullptr) {
+      const V *values, int num_keys, double density,
+      double expected_insert_frac,
+      const LinearModel<T> *existing_model = nullptr,
+      DataNodeStats* stats = nullptr) {
     const static int min_sample_size = 25;
 
     // Stop increasing sample size if relative diff of stats between samples is
@@ -1551,7 +1460,7 @@ public:
   static void build_node_implicit_sampling(const V *values, int num_keys,
                                            int sample_num_keys,
                                            int sample_data_capacity,
-                                           int step_size, StatAccumulator *ent,
+                                           int step_size, StatAccumulator* ent,
                                            const LinearModel<T> *sample_model) {
     int last_position = -1;
     int sample_keys_remaining = sample_num_keys;
@@ -1582,10 +1491,10 @@ public:
   // key/data_slots of an existing node
   // Assumes existing_model is trained on the dense array of keys
   static double compute_expected_cost_from_existing(
-    const self_type *node, int left, int right, double density,
-    double expected_insert_frac,
-    const LinearModel<T> *existing_model = nullptr,
-    DataNodeStats *stats = nullptr) {
+      const self_type *node, int left, int right, double density,
+      double expected_insert_frac,
+      const LinearModel<T> *existing_model = nullptr,
+      DataNodeStats* stats = nullptr) {
     assert(left >= 0 && right <= node->data_capacity_);
 
     LinearModel<T> model;
@@ -1644,7 +1553,7 @@ public:
   static void build_node_implicit_from_existing(const self_type *node, int left,
                                                 int right, int num_actual_keys,
                                                 int data_capacity,
-                                                StatAccumulator *acc,
+                                                StatAccumulator* acc,
                                                 const LinearModel<T> *model) {
     int last_position = -1;
     int keys_remaining = num_actual_keys;
@@ -1675,10 +1584,15 @@ public:
   // Initalize key/payload/bitmap arrays and relevant metadata
   void initialize(int num_keys, double density) {
     num_keys_ = num_keys;
-    data_capacity_ = std::max(static_cast<int>(num_keys / density), num_keys);
-    bitmap_size_ = static_cast<size_t>(data_capacity_ == 0 ? 0 : std::ceil(data_capacity_ / 64.));
+    data_capacity_ = std::max(static_cast<int>(num_keys / density), num_keys + 1);
+    bitmap_size_ = static_cast<size_t>(std::ceil(data_capacity_ / 64.));
     bitmap_ = new (bitmap_allocator().allocate(bitmap_size_)) uint64_t[bitmap_size_]();  // initialize to all false
-    buffer_ = new (buffer_allocator().allocate(data_capacity_)) AlexDataBuffer *[data_capacity_];
+#if ALEX_DATA_NODE_SEP_ARRAYS
+    key_slots_ = new (key_allocator().allocate(data_capacity_)) T[data_capacity_];
+    payload_slots_ = new (payload_allocator().allocate(data_capacity_)) P[data_capacity_];
+#else
+    data_slots_ = new (value_allocator().allocate(data_capacity_)) V[data_capacity];
+#endif
   }
 
   // Assumes pretrained_model is trained on dense array of keys
@@ -1723,7 +1637,12 @@ public:
       last_position = position;
     }
 
-    expansion_threshold_ = std::min(std::max(data_capacity_ * kMaxDensity, static_cast<double>(num_keys + 1)),
+    for (int i = last_position + 1; i < data_capacity_; i++) {
+      ALEX_DATA_NODE_KEY_AT(i) = kEndSentinel_;
+    }
+
+    expansion_threshold_ = std::min(std::max(data_capacity_ * kMaxDensity,
+                                             static_cast<double>(num_keys + 1)),
                                     static_cast<double>(data_capacity_));
     contraction_threshold_ = data_capacity_ * kMinDensity;
     min_key_ = values[0].first;
@@ -1736,8 +1655,8 @@ public:
   // If the linear model and num_actual_keys have been precomputed, we can avoid
   // redundant work
   void bulk_load_from_existing(
-      const self_type *node, int left, int right,
-      bool keep_left = false, bool keep_right = false,
+      const self_type *node, int left, int right, bool keep_left = false,
+      bool keep_right = false,
       const LinearModel<T> *precomputed_model = nullptr,
       int precomputed_num_actual_keys = -1) {
     assert(left >= 0 && right <= node->data_capacity_);
@@ -1760,7 +1679,6 @@ public:
     }
 
     initialize(num_actual_keys, kMinDensity);
-
     if (num_actual_keys == 0) {
       expansion_threshold_ = data_capacity_;
       contraction_threshold_ = 0;
@@ -1805,9 +1723,9 @@ public:
     max_key_ = node->max_key_;
 
     expansion_threshold_ =
-      std::min(std::max(data_capacity_ * kMaxDensity,
-                        static_cast<double>(num_keys_ + 1)),
-                static_cast<double>(data_capacity_));
+        std::min(std::max(data_capacity_ * kMaxDensity,
+                          static_cast<double>(num_keys_ + 1)),
+                 static_cast<double>(data_capacity_));
     contraction_threshold_ = data_capacity_ * kMinDensity;
   }
 
@@ -1906,7 +1824,8 @@ public:
   // Unused function: builds a spline model by connecting the smallest and
   // largest points instead of using
   // a linear regression
-  static void build_spline(const V *values, int num_keys, const LinearModel<T> *model) {
+  static void build_spline(const V *values, int num_keys,
+                           const LinearModel<T> *model) {
     int y_max = num_keys - 1;
     int y_min = 0;
     model->a_ = static_cast<double>(y_max - y_min) / (values[y_max].first - values[y_min].first);
@@ -1924,7 +1843,6 @@ public:
 
   // Searches for the last non-gap position equal to key
   // If no positions equal to key, returns -1
-  /// If position deleted(not compressed), returns -2 
   int find_key(const T &key) {
     num_lookups_++;
     int position = predict_position(key);
@@ -1937,20 +1855,46 @@ public:
     return buf->find_idx(key);
   }
 
-  int find_lower_bound(const T &key) {
-    int position = predict_position(key);
-    auto buf = buffer_[position];
-    order_t prev_order = buf->min_idx;
-    order_t next_order = buf->order_slots_[prev_order];
-    T next_key = buf->key_slots_[next_order];
+  // Searches for the first non-gap position no less than key
+  // Returns position in range [0, data_capacity]
+  // Compare with lower_bound()
+  int find_lower(const T &key) {
+    num_lookups_++;
+    int predicted_pos = predict_position(key);
 
-    while (next_order != -1) {
-      if (next_key >= key) {
-        return prev_order;
-      }
-      prev_order = next_order;
-      next_order = buf->order_slots_[next_order];
-      next_key = buf->key_slots_[next_order];
+    int pos = exponential_search_lower_bound(predicted_pos, key);
+    return get_next_filled_position(pos, false);
+  }
+
+  // Searches for the first non-gap position greater than key
+  // Returns position in range [0, data_capacity]
+  // Compare with upper_bound()
+  int find_upper(const T &key) {
+    num_lookups_++;
+    int predicted_pos = predict_position(key);
+
+    int pos = exponential_search_upper_bound(predicted_pos, key);
+    return get_next_filled_position(pos, false);
+  }
+
+  // Finds position to insert a key.
+  // First returned value takes prediction into account.
+  // Second returned value is first valid position (i.e., upper_bound of key).
+  // If there are duplicate keys, the insert position will be to the right of
+  // all existing keys of the same value.
+  std::pair<int, int> find_insert_position(const T &key) {
+    int predicted_pos =
+        predict_position(key);  // first use model to get prediction
+
+    // insert to the right of duplicate keys
+    int pos = exponential_search_upper_bound(predicted_pos, key);
+    if (predicted_pos <= pos || check_exists(pos)) {
+      return {pos, pos};
+    } else {
+      // Place inserted key as close as possible to the predicted position while
+      // maintaining correctness
+      return {std::min(predicted_pos, get_next_filled_position(pos, true) - 1),
+              pos};
     }
 
     return -1;
@@ -2083,6 +2027,29 @@ public:
   // already-existing key.
   // -1 if no insertion.
   std::pair<int, int> insert(const T &key, const P &payload) {
+    // Periodically check for catastrophe
+    if (num_inserts_ % 64 == 0 && catastrophic_cost()) {
+      return {2, -1};
+    }
+
+    // Check if node is full (based on expansion_threshold)
+    if (num_keys_ >= expansion_threshold_) {
+      if (significant_cost_deviation()) {
+        return {1, -1};
+      }
+      if (catastrophic_cost()) {
+        return {2, -1};
+      }
+      if (num_keys_ > max_slots_ * kMinDensity) {
+        return {3, -1};
+      }
+      // Expand
+      bool keep_left = is_append_mostly_right();
+      bool keep_right = is_append_mostly_left();
+      resize(kMinDensity, false, keep_left, keep_right);
+      num_resizes_++;
+    }
+
     // Insert
     int position = predict_position(key);
     std::cout << "position: " << position << std::endl;
@@ -2167,11 +2134,21 @@ public:
       return false;
     }
 
-    printf("resize\n");
-    int new_data_capacity = std::max(static_cast<int>(num_keys_ / target_density), num_keys_);
-    auto new_bitmap_size = static_cast<size_t>(std::ceil(new_data_capacity / 64.));
-    auto new_bitmap = new (bitmap_allocator().allocate(new_bitmap_size)) uint64_t[new_bitmap_size]();  // initialize to all false
-    auto new_buffer = new (buffer_allocator().allocate(new_data_capacity)) AlexDataBuffer *[new_data_capacity];
+    int new_data_capacity =
+        std::max(static_cast<int>(num_keys_ / target_density), num_keys_ + 1);
+    auto new_bitmap_size =
+        static_cast<size_t>(std::ceil(new_data_capacity / 64.));
+    auto new_bitmap = new (bitmap_allocator().allocate(new_bitmap_size))
+        uint64_t[new_bitmap_size]();  // initialize to all false
+#if ALEX_DATA_NODE_SEP_ARRAYS
+    T *new_key_slots =
+        new (key_allocator().allocate(new_data_capacity)) T[new_data_capacity];
+    P *new_payload_slots = new (payload_allocator().allocate(new_data_capacity))
+        P[new_data_capacity];
+#else
+    V *new_data_slots = new (value_allocator().allocate(new_data_capacity))
+        V[new_data_capacity];
+#endif
 
     // Retrain model if the number of keys is sufficiently small (under 50)
     if (num_keys_ < 50 || force_retrain) {
@@ -2236,7 +2213,11 @@ public:
     expansion_threshold_ = std::min(std::max(data_capacity_ * kMaxDensity, static_cast<double>(num_keys_ + 1)), static_cast<double>(data_capacity_));
     contraction_threshold_ = data_capacity_ * kMinDensity;
 
-    return true;
+    expansion_threshold_ =
+        std::min(std::max(data_capacity_ * kMaxDensity,
+                          static_cast<double>(num_keys_ + 1)),
+                 static_cast<double>(data_capacity_));
+    contraction_threshold_ = data_capacity_ * kMinDensity;
   }
 
   inline bool is_append_mostly_right() const {
@@ -2247,14 +2228,241 @@ public:
     return static_cast<double>(num_left_out_of_bounds_inserts_) / num_inserts_ > kAppendMostlyThreshold;
   }
 
+  // Insert key into pos. The caller must guarantee that pos is a gap.
+  void insert_element_at(const T &key, P payload, int pos) {
+#if ALEX_DATA_NODE_SEP_ARRAYS
+    key_slots_[pos] = key;
+    payload_slots_[pos] = payload;
+#else
+    data_slots_[index] = std::make_pair(key, payload);
+#endif
+    set_bit(pos);
+
+    // Overwrite preceding gaps until we reach the previous element
+    pos--;
+    while (pos >= 0 && !check_exists(pos)) {
+      ALEX_DATA_NODE_KEY_AT(pos) = key;
+      pos--;
+    }
+  }
+
+  // Insert key into pos, shifting as necessary in the range [left, right)
+  // Returns the actual position of insertion
+  int insert_using_shifts(const T &key, P payload, int pos) {
+    // Find the closest gap
+    int gap_pos = closest_gap(pos);
+    set_bit(gap_pos);
+    if (gap_pos >= pos) {
+      for (int i = gap_pos; i > pos; i--) {
+#if ALEX_DATA_NODE_SEP_ARRAYS
+        key_slots_[i] = key_slots_[i - 1];
+        payload_slots_[i] = payload_slots_[i - 1];
+#else
+        data_slots_[i] = data_slots_[i - 1];
+#endif
+      }
+      insert_element_at(key, payload, pos);
+      num_shifts_ += gap_pos - pos;
+      return pos;
+    } else {
+      for (int i = gap_pos; i < pos - 1; i++) {
+#if ALEX_DATA_NODE_SEP_ARRAYS
+        key_slots_[i] = key_slots_[i + 1];
+        payload_slots_[i] = payload_slots_[i + 1];
+#else
+        data_slots_[i] = data_slots_[i + 1];
+#endif
+      }
+      insert_element_at(key, payload, pos - 1);
+      num_shifts_ += pos - gap_pos - 1;
+      return pos - 1;
+    }
+  }
+
+#if ALEX_USE_LZCNT
+  // Returns position of closest gap to pos
+  // Returns pos if pos is a gap
+  int closest_gap(int pos) const {
+    pos = std::min(pos, data_capacity_ - 1);
+    int bitmap_pos = pos >> 6;
+    int bit_pos = pos - (bitmap_pos << 6);
+    if (bitmap_[bitmap_pos] == static_cast<uint64_t>(-1) ||
+        (bitmap_pos == bitmap_size_ - 1 &&
+         _mm_popcnt_u64(bitmap_[bitmap_pos]) ==
+             data_capacity_ - ((bitmap_size_ - 1) << 6))) {
+      // no gaps in this block of 64 positions, start searching in adjacent
+      // blocks
+      int left_bitmap_pos = 0;
+      int right_bitmap_pos = ((data_capacity_ - 1) >> 6);  // inclusive
+      int max_left_bitmap_offset = bitmap_pos - left_bitmap_pos;
+      int max_right_bitmap_offset = right_bitmap_pos - bitmap_pos;
+      int max_bidirectional_bitmap_offset =
+          std::min<int>(max_left_bitmap_offset, max_right_bitmap_offset);
+      int bitmap_distance = 1;
+      while (bitmap_distance <= max_bidirectional_bitmap_offset) {
+        uint64_t left_bitmap_data = bitmap_[bitmap_pos - bitmap_distance];
+        uint64_t right_bitmap_data = bitmap_[bitmap_pos + bitmap_distance];
+        if (left_bitmap_data != static_cast<uint64_t>(-1) &&
+            right_bitmap_data != static_cast<uint64_t>(-1)) {
+          int left_gap_pos = ((bitmap_pos - bitmap_distance + 1) << 6) -
+                             static_cast<int>(_lzcnt_u64(~left_bitmap_data)) -
+                             1;
+          int right_gap_pos = ((bitmap_pos + bitmap_distance) << 6) +
+                              static_cast<int>(_tzcnt_u64(~right_bitmap_data));
+          if (pos - left_gap_pos <= right_gap_pos - pos ||
+              right_gap_pos >= data_capacity_) {
+            return left_gap_pos;
+          } else {
+            return right_gap_pos;
+          }
+        } else if (left_bitmap_data != static_cast<uint64_t>(-1)) {
+          int left_gap_pos = ((bitmap_pos - bitmap_distance + 1) << 6) -
+                             static_cast<int>(_lzcnt_u64(~left_bitmap_data)) -
+                             1;
+          // also need to check next block to the right
+          if (bit_pos > 32 && bitmap_pos + bitmap_distance + 1 < bitmap_size_ &&
+              bitmap_[bitmap_pos + bitmap_distance + 1] !=
+                  static_cast<uint64_t>(-1)) {
+            int right_gap_pos =
+                ((bitmap_pos + bitmap_distance + 1) << 6) +
+                static_cast<int>(
+                    _tzcnt_u64(~bitmap_[bitmap_pos + bitmap_distance + 1]));
+            if (pos - left_gap_pos <= right_gap_pos - pos ||
+                right_gap_pos >= data_capacity_) {
+              return left_gap_pos;
+            } else {
+              return right_gap_pos;
+            }
+          } else {
+            return left_gap_pos;
+          }
+        } else if (right_bitmap_data != static_cast<uint64_t>(-1)) {
+          int right_gap_pos = ((bitmap_pos + bitmap_distance) << 6) +
+                              static_cast<int>(_tzcnt_u64(~right_bitmap_data));
+          if (right_gap_pos < data_capacity_) {
+            // also need to check next block to the left
+            if (bit_pos < 32 && bitmap_pos - bitmap_distance > 0 &&
+                bitmap_[bitmap_pos - bitmap_distance - 1] !=
+                    static_cast<uint64_t>(-1)) {
+              int left_gap_pos =
+                  ((bitmap_pos - bitmap_distance) << 6) -
+                  static_cast<int>(
+                      _lzcnt_u64(~bitmap_[bitmap_pos - bitmap_distance - 1])) -
+                  1;
+              if (pos - left_gap_pos <= right_gap_pos - pos ||
+                  right_gap_pos >= data_capacity_) {
+                return left_gap_pos;
+              } else {
+                return right_gap_pos;
+              }
+            } else {
+              return right_gap_pos;
+            }
+          }
+        }
+        bitmap_distance++;
+      }
+      if (max_left_bitmap_offset > max_right_bitmap_offset) {
+        for (int i = bitmap_pos - bitmap_distance; i >= left_bitmap_pos; i--) {
+          if (bitmap_[i] != static_cast<uint64_t>(-1)) {
+            return ((i + 1) << 6) - static_cast<int>(_lzcnt_u64(~bitmap_[i])) -
+                   1;
+          }
+        }
+      } else {
+        for (int i = bitmap_pos + bitmap_distance; i <= right_bitmap_pos; i++) {
+          if (bitmap_[i] != static_cast<uint64_t>(-1)) {
+            int right_gap_pos =
+                (i << 6) + static_cast<int>(_tzcnt_u64(~bitmap_[i]));
+            if (right_gap_pos >= data_capacity_) {
+              return -1;
+            } else {
+              return right_gap_pos;
+            }
+          }
+        }
+      }
+      return -1;
+    } else {
+      // search within block of 64 positions
+      uint64_t bitmap_data = bitmap_[bitmap_pos];
+      int closest_right_gap_distance = 64;
+      int closest_left_gap_distance = 64;
+      // Logically gaps to the right of pos, in the bitmap these are gaps to the
+      // left of pos's bit
+      // This covers the case where pos is a gap
+      // For example, if pos is 3, then bitmap '10101101' -> bitmap_right_gaps
+      // '01010000'
+      uint64_t bitmap_right_gaps = ~(bitmap_data | ((1ULL << bit_pos) - 1));
+      if (bitmap_right_gaps != 0) {
+        closest_right_gap_distance =
+            static_cast<int>(_tzcnt_u64(bitmap_right_gaps)) - bit_pos;
+      } else if (bitmap_pos + 1 < bitmap_size_) {
+        // look in the next block to the right
+        closest_right_gap_distance =
+            64 + static_cast<int>(_tzcnt_u64(~bitmap_[bitmap_pos + 1])) -
+            bit_pos;
+      }
+      // Logically gaps to the left of pos, in the bitmap these are gaps to the
+      // right of pos's bit
+      // For example, if pos is 3, then bitmap '10101101' -> bitmap_left_gaps
+      // '00000010'
+      uint64_t bitmap_left_gaps = (~bitmap_data) & ((1ULL << bit_pos) - 1);
+      if (bitmap_left_gaps != 0) {
+        closest_left_gap_distance =
+            bit_pos - (63 - static_cast<int>(_lzcnt_u64(bitmap_left_gaps)));
+      } else if (bitmap_pos > 0) {
+        // look in the next block to the left
+        closest_left_gap_distance =
+            bit_pos + static_cast<int>(_lzcnt_u64(~bitmap_[bitmap_pos - 1])) +
+            1;
+      }
+
+      if (closest_right_gap_distance < closest_left_gap_distance &&
+          pos + closest_right_gap_distance < data_capacity_) {
+        return pos + closest_right_gap_distance;
+      } else {
+        return pos - closest_left_gap_distance;
+      }
+    }
+  }
+#else
+  // A slower version of closest_gap that does not use lzcnt and tzcnt
+  // Does not return pos if pos is a gap
+  int closest_gap(int pos) const {
+    int max_left_offset = pos;
+    int max_right_offset = data_capacity_ - pos - 1;
+    int max_bidirectional_offset =
+        std::min<int>(max_left_offset, max_right_offset);
+    int distance = 1;
+    while (distance <= max_bidirectional_offset) {
+      if (!check_exists(pos - distance)) {
+        return pos - distance;
+      }
+      if (!check_exists(pos + distance)) {
+        return pos + distance;
+      }
+      distance++;
+    }
+    if (max_left_offset > max_right_offset) {
+      for (int i = pos - distance; i >= 0; i--) {
+        if (!check_exists(i)) return i;
+      }
+    } else {
+      for (int i = pos + distance; i < data_capacity_; i++) {
+        if (!check_exists(i)) return i;
+      }
+    }
+    return -1;
+  }
+#endif
+
   /*** Deletes ***/
 
-  // Erase key with the input value
-  // Returns whether key is erased (there cannot be multiple keys with the same
-  // value)
-  bool erase(const T &key) {
-    int position = predict_position(key);
-    if (position < 0 || position >= data_capacity_ || !check_exists(position)) return false;
+  // Erase the left-most key with the input value
+  // Returns the number of keys erased (0 or 1)
+  int erase_one(const T &key) {
+    int pos = find_lower(key);
 
     int pos = find_key(key);
     if (pos < 0) return false;
@@ -2267,7 +2475,39 @@ public:
       resize(kMaxDensity);  // contract
       num_resizes_++;
     }
-    return true;
+  }
+
+  // Erase all keys with the input value
+  // Returns the number of keys erased (there may be multiple keys with the same
+  // value)
+  int erase(const T &key) {
+    int pos = upper_bound(key);
+
+    if (pos == 0 || !key_equal(ALEX_DATA_NODE_KEY_AT(pos - 1), key)) return 0;
+
+    // Erase preceding positions until we reach a key with smaller value
+    int num_erased = 0;
+    T next_key;
+    if (pos == data_capacity_) {
+      next_key = kEndSentinel_;
+    } else {
+      next_key = ALEX_DATA_NODE_KEY_AT(pos);
+    }
+    pos--;
+    while (pos >= 0 && key_equal(ALEX_DATA_NODE_KEY_AT(pos), key)) {
+      ALEX_DATA_NODE_KEY_AT(pos) = next_key;
+      num_erased += check_exists(pos);
+      unset_bit(pos);
+      pos--;
+    }
+
+    num_keys_ -= num_erased;
+
+    if (num_keys_ < contraction_threshold_) {
+      resize(kMaxDensity);  // contract
+      num_resizes_++;
+    }
+    return num_erased;
   }
 
   // Erase keys with value between start key (inclusive) and end key.
@@ -2300,7 +2540,7 @@ public:
     num_keys_ -= num_erased;
 
     if (num_keys_ < contraction_threshold_) {
-      resize(kMaxDensity); // contract
+      resize(kMaxDensity);  // contract
       num_resizes_++;
     }
     return num_erased;
@@ -2381,6 +2621,19 @@ public:
       return false;
     }
     return true;
+  }
+
+  // Check that a key exists in the key/data_slots
+  // If validate_bitmap is true, confirm that the corresponding position in the
+  // bitmap is correctly set to 1
+  bool key_exists(const T &key, bool validate_bitmap) const {
+    for (int i = 0; i < data_capacity_ - 1; i++) {
+      if (key_equal(ALEX_DATA_NODE_KEY_AT(i), key) &&
+          (!validate_bitmap || check_exists(i))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   std::string to_string() const {
