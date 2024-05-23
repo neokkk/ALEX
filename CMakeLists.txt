@@ -14,7 +14,7 @@ elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
     set(CMAKE_CXX_FLAGS "-O3 -xHost")
 else()
     # clang and gcc
-    set(CMAKE_CXX_FLAGS "-O2 -march=native -Wall -Wextra -g -mavx512f")
+    set(CMAKE_CXX_FLAGS "-O1 -march=native -Wall -Wextra -mavx512f -g")
 endif()
 
 include_directories(src/core src/utils)
