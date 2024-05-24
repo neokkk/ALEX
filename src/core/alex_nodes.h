@@ -558,10 +558,8 @@ public:
     }
 
     int find_idx(T key, bool use_simd = false) {
-	printf("current_collision_factor: %d\n", current_collision_factor);
       int size_ = 1 << current_collision_factor;
 
-      printf("count: %d\n", count);
       if (count == 0 ||
         node_->key_less(key, key_slots_[min_idx]) ||
         node_->key_less(key_slots_[max_idx], key)) {
@@ -620,7 +618,6 @@ public:
     bool append(const T &key, const P &payload) {
       /// TODO: transaction start
       if (is_full()) {
-        std::cout << "is full" << std::endl;
         bool result = expand();
         /// TODO: transaction end
         if (!result) { /// full
@@ -629,26 +626,19 @@ public:
       }
 
       auto pos = size();
-      printf("pos: %d\n", pos);
       key_slots_[pos] = key;
       payload_slots_[pos] = payload;
 
       /*** Update order ***/
 
-      printf("input key: %lld, min key: %lld, max key: %lld\n", key, key_slots_[min_idx], key_slots_[max_idx]);
-      printf("min_idx: %d, max_idx: %d\n", min_idx, max_idx);
-
       if (node_->key_less(key, key_slots_[min_idx])) {
-        std::cout << "key is less than min" << std::endl;
         order_slots_[pos] = min_idx;
         min_idx = pos;
       } else if (node_->key_less(key_slots_[max_idx], key)) {
-        std::cout << "key is greater than max" << std::endl;
         order_slots_[max_idx] = pos;
         max_idx = pos;
         order_slots_[pos] = -1; /// update max to -1
       } else { /// TODO: concurrent control
-        std::cout << "key is in the middle" << std::endl;
         auto order_idx = find_last_no_greater_than(key, true);
         order_slots_[pos] = order_slots_[order_idx];
         order_slots_[order_idx] = pos;
@@ -770,14 +760,12 @@ public:
     */
     bool expand() {
       if (is_totally_full()) {
-        std::cout << "is totally full" << std::endl;
         return false;
       }
 
       int prev_size = 1 << current_collision_factor;
       current_collision_factor++;
       int size = 1 << current_collision_factor;
-      std::cout << "buffer expanded to " << size << std::endl;
 
       if (size > 8) {
         compress(); /// compress before expand
@@ -849,7 +837,6 @@ public:
         int key_vec_size = std::ceil(size_ / key_unit_count);
         int payload_unit_count = 512 / (sizeof(P) * byte);
         int payload_vec_size = std::ceil(size_ / payload_unit_count);
-        std::cout << "key_vec_size: " << key_vec_size << ", payload_vec_size: " << payload_vec_size << std::endl;
         __mmask16 key_mask = mask, payload_mask = mask;
 
         for (int i = 0; i < key_vec_size; ++i) {
@@ -878,7 +865,6 @@ public:
 
           key_mask >>= key_unit_count;
         }
-        std::cout << "min_key: " << min_key << std::endl;
         
         for (int i = 0; i < payload_vec_size; ++i) {
           payload_mask = payload_mask & (1 << payload_unit_count - 1);
@@ -2109,13 +2095,11 @@ public:
   std::pair<int, int> insert(const T &key, const P &payload) {
     // Insert
     int position = predict_position(key);
-    std::cout << "position: " << position << std::endl;
 
     if (position < data_capacity_) {
       if (check_exists(position)) {
         auto buf = buffer_[position];
         if (buf->key_exists(key)) {
-          std::cout << "key exists" << std::endl;
           return {-1, position};
         }
 
@@ -2123,7 +2107,6 @@ public:
         if (!result) { /// try to insert into full buffer
           bool keep_left = is_append_mostly_right();
           bool keep_right = is_append_mostly_left();
-          std::cout << "keep_left: " << keep_left << ", keep_right: " << keep_right << std::endl;
           
           result = resize(kMinDensity, true, keep_left, keep_right); /// retrain model
           if (!result) {
@@ -2133,7 +2116,6 @@ public:
           insert(key, payload); /// insert again
         }
       } else { /// first access at this position
-        std::cout << "first" << std::endl;
         buffer_[position] = new AlexDataBuffer(this, key, payload);
         set_bit(position);
       }
@@ -2158,16 +2140,11 @@ public:
   int build_new(LinearModelBuilder<T> &builder, const_iterator_type &it, int left, int right) {
     int c = 0;
     for (int i = left; it.cur_idx_ < right && !it.is_end(); it++) {
-      std::cout << "build_new: " << it.cur_idx_ << std::endl;
-      std::cout << "data_capacity_: " << it.node_->data_capacity_ << ", num_keys_: " << it.node_->num_keys_ << std::endl;
-      std::cout << "min_key_: " << it.node_->min_key_ << ", max_key_: " << it.node_->max_key_ << std::endl;
-      std::cout << "cur_idx_: " << it.cur_idx_ << ", cur_bitmap_idx_: " << it.cur_bitmap_idx_ << std::endl;
       auto buf = it.node_->buffer_[it.cur_bitmap_idx_];
       if (buf == nullptr) {
         printf("nullptr\n");
         continue;
       }
-      printf("buf->min_idx: %d, buf->max_idx: %d\n", buf->min_idx, buf->max_idx);
       order_t next_order = buf->order_slots_[buf->min_idx];
       T next_key = buf->key_slots_[next_order];
 
@@ -2180,7 +2157,6 @@ public:
       }
     }
     builder.build();
-    std::cout << "build_new end" << std::endl;
     return c;
   }
 
@@ -2418,9 +2394,7 @@ public:
   void print_buffer() {
     for (int i = 0; i < data_capacity_; i++) {
       if (check_exists(i)) {
-        std::cout << "position: " << i << " => ";
         buffer_[i]->print();
-        std::cout << std::endl;
       }
     }
   }
