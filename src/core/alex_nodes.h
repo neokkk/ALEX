@@ -557,7 +557,7 @@ public:
       return 1 << current_collision_factor;
     }
 
-    int find_idx(T key) {
+    int find_idx(T key, bool use_simd = false) {
       int size = 1 << current_collision_factor;
 
       printf("count: %d\n", count);
@@ -567,7 +567,7 @@ public:
         return -1;
       }
 
-    #ifdef __AVX512F__
+    #ifdef USE_SIMD
       std::cout << "simd lookup" << std::endl;
       const int unit_count = 512 / (sizeof(T) * byte);
       const int vec_size = size / unit_count;
@@ -666,7 +666,7 @@ public:
     order_t find_last_no_greater_than(T key, bool use_simd = false) {
       int size = 1 << current_collision_factor;
 
-      if (use_simd) {
+      #ifdef USE_SIMD
         assert(size > 4);
 
         const int unit_count = 512 / (sizeof(T) * byte);
@@ -698,7 +698,7 @@ public:
         }
 
         return max_idx;
-      } else {
+      #else
         std::vector<order_t> small_key_idxs;
         printf("small_key_idxs(count: %d): ", count);
         for (int i = 0; i < count; i++) {
@@ -716,13 +716,13 @@ public:
         }
         printf("result: %d\n");
         return *result;
-      }
+      #endif
     }
 
     order_t find_first_greater_than(T key, bool use_simd = false) {
       int size = 1 << current_collision_factor;
 
-      if (use_simd) {
+      #ifdef USE_SIMD
         assert(size > 4);
 
         const int unit_count = 512 / (sizeof(T) * byte);
@@ -747,7 +747,7 @@ public:
         }
 
         return min_idx;
-      } else {
+      #else
         std::vector<order_t> large_key_idxs;
         for (int i = 0; i < count; i++) {
           if (node_->key_less(key_slots_[i], key)) {
@@ -761,7 +761,7 @@ public:
           return -1;
         }
         return *result;
-      }
+      #endif
     }
 
     /**
@@ -818,128 +818,150 @@ public:
       return true;
     }
 
-    int compress() {
-      auto size = 1 << current_collision_factor;
-      uint16_t delete_bits = static_cast<uint16_t>(*delete_bitmap_ >> (64 - size));
-      int popcount = __builtin_popcount(delete_bits);
-      uint16_t mask = ~delete_bits << (16 - size);
+    int compress(bool use_simd = false) {
+      auto size_ = 1 << current_collision_factor;
+      uint16_t delete_bits = static_cast<uint16_t>(*delete_bitmap_ >> (64 - size_));
+      int pop_count = __builtin_popcount(delete_bits);
+      uint16_t mask = ~delete_bits << (16 - size_);
       T min_key = std::numeric_limits<T>::max(), max_key = std::numeric_limits<T>::min();
       int min_key_idx = 0;
 
-      assert(size > 8);
 
-      if (popcount == 0) {
+      assert(size_ > 8);
+
+      if (pop_count == 0) {
         return 0;
       }
 
-      if (popcount == size) {
-        auto bitmap_size = static_cast<size_t>(std::ceil(size / 64.));
+      if (pop_count == size_) {
+        auto bitmap_size = static_cast<size_t>(std::ceil(size_ / 64.));
         memset(delete_bitmap_, 0, bitmap_size);
-        memset(order_slots_, 0, size * sizeof(order_t));
-        count = 0;
+        memset(order_slots_, 0, size_ * sizeof(order_t));
         min_idx = 0;
         max_idx = 0;
-        return size;
+        return size_;
       }
 
-    #if ALEX_DATA_NODE_SEP_ARRAYS
-      int key_vec_size = sizeof(T) * size / 64;
-      int payload_vec_size = sizeof(P) * size / 64;
-      std::cout << "key_vec_size: " << key_vec_size << ", payload_vec_size: " << payload_vec_size << std::endl;
-      int last_key_attr = 0, last_payload_addr = 0;
+    #ifdef USE_SIMD
+      if (use_simd) {
+        int key_unit_count = 512 / (sizeof(T) * byte);
+        int key_vec_size = std::ceil(size_ / key_unit_count);
+        int payload_unit_count = 512 / (sizeof(P) * byte);
+        int payload_vec_size = std::ceil(size_ / payload_unit_count);
+        std::cout << "key_vec_size: " << key_vec_size << ", payload_vec_size: " << payload_vec_size << std::endl;
+        __mmask16 key_mask = mask, payload_mask = mask;
 
-      for (int i = 0; i < key_vec_size; ++i) {
-        int right_shift = size / key_vec_size * (key_vec_size - i - 1);
-        __mmask16 key_mask = reverse_bits(mask >> right_shift) & (1 << (size / key_vec_size) - 1);
-        size_t valid_key_count = __builtin_popcount(key_mask);
+        for (int i = 0; i < key_vec_size; ++i) {
+          key_mask = key_mask & (1 << key_unit_count - 1);
+          size_t valid_key_count = __builtin_popcount(key_mask);
 
-        if (valid_key_count == 0) {
-          continue;
+          if (valid_key_count == 0) { /// no compress keys
+            continue;
+          }
+
+          __m512i key_vec = _mm512_load_epi64(&key_slots_[i * key_unit_count]);
+          __m512i key_res_vec = _mm512_maskz_compress_epi64(key_mask, key_vec);
+
+          T min_key_ = reduce_min_exclude_zero_SIMD(key_res_vec);
+          if (min_key_ < min_key) {
+            min_key = min_key_;
+            __m512i min_vec = _mm512_set1_epi64(min_key_);
+            __mmask16 min_mask = _mm512_cmpeq_epi64_mask(key_res_vec, min_vec);
+            min_key_idx = __tzcnt_u64(min_mask);
+          }
+
+          auto it = key_slots_.begin() + i * key_unit_count;
+          std::copy_if(it, it + key_unit_count, it, [&](T k) {
+            return k != 0; /// filter out zero keys
+          });
+
+          key_mask >>= key_unit_count;
+        }
+        std::cout << "min_key: " << min_key << std::endl;
+        
+        for (int i = 0; i < payload_vec_size; ++i) {
+          payload_mask = payload_mask & (1 << payload_unit_count - 1);
+          size_t valid_payload_count = __builtin_popcount(payload_mask);
+
+          if (valid_payload_count == 0) {
+            continue;
+          }
+
+          __m512i payload_vec = _mm512_load_epi64(&payload_slots_[i * payload_unit_count]);
+          __m512i payload_res_vec = _mm512_maskz_compress_epi64(payload_mask, payload_vec);
+
+          auto it = payload_slots_.begin() + i * payload_unit_count;
+          std::copy_if(it, it + payload_unit_count, it, [&](P p) {
+            return p != 0; /// filter out zero payloads
+          });
+
+          payload_mask >>= payload_unit_count;
         }
 
-        __m512i key_vec = _mm512_load_epi64(key_slots_ + i * byte * sizeof(T));
-        __m512i key_res_vec = _mm512_maskz_compress_epi64(key_mask, key_vec);
+        /* Update order */
 
-        int min_key_ = reduce_min_exclude_zero_SIMD(key_res_vec);
-        if (min_key_ < min_key) {
-          min_key = min_key_;
-          __m512i min_vec = _mm512_set1_epi64(min_key_);
-          __mmask16 min_mask = _mm512_cmpeq_epi64_mask(key_res_vec, min_vec);
-          min_key_idx = __tzcnt_u64(min_mask);
+        order_.clear();     
+        min_idx = min_key_idx;
+
+        order_t match_idx;
+
+        for (int i = 0; i < size_ - 1; i++) {
+          match_idx = find_first_greater_than(key_slots_[min_key_idx], true);
+          order_[min_key_idx] = match_idx;
+          min_key_idx = match_idx;
         }
 
-        auto key_res = (T *)&key_res_vec;
+        match_idx = find_first_greater_than(key_slots_[min_key_idx], true);
+        order_[min_key_idx] = match_idx;
+        order_[match_idx] = -1;
+        max_idx = match_idx;
 
-        memcpy(key_slots_ + last_key_attr, key_res, valid_key_count * sizeof(T));
-        last_key_attr += valid_key_count * sizeof(T);
-      }
-      std::cout << "min_key: " << min_key << ", max_key: " << max_key << std::endl;
-      
-      for (int i = 0; i < payload_vec_size; ++i) {
-        int right_shift = size / payload_vec_size * (payload_vec_size - i - 1);
-        __mmask16 payload_mask = reverse_bits(mask >> right_shift) & (1 << (size / payload_vec_size) - 1);
-        size_t valid_payload_count = __builtin_popcount(payload_mask);
+        /*** Initial bitmap ***/
 
-        if (valid_payload_count == 0) {
-          continue;
-        }
+        delete_bitmap_ = 0;
 
-        __m512i payload_vec = _mm512_load_epi64(payload_slots_ + i * byte * sizeof(P));
-        __m512i payload_res_vec = _mm512_maskz_compress_epi64(payload_mask, payload_vec);
-        auto payload_res = (P *)&payload_res_vec;
-
-        memcpy(payload_slots_ + last_payload_addr, payload_res, valid_payload_count * sizeof(P));
-        last_payload_addr += valid_payload_count * sizeof(P);
-      }
-
-    #else
-      int value_vec_size = sizeof(V) * size / 64;
-      int last_data_addr = 0;
-
-      for (int i = 0; i < value_vec_size; ++i) {
-        int right_shift = size / value_vec_size * (value_vec_size - i - 1);
-        __mmask16 value_mask = reverse_bits(mask >> right_shift) & (1 << (size / value_vec_size) - 1);
-        size_t valid_value_count = __builtin_popcount(value_mask);
-
-        if (valid_value_count == 0) {
-          continue;
-        }
-
-        __mm512i value_vec = _mm512_load_epi64(data_slots_ + i * byte * sizeof(V));
-        __mm512i value_res_vec = _mm512_maskz_compress_epi64(value_mask, value_vec);
-        auto value_res = (V *)&value_res_vec;
-
-        memcpy(data_slots_ + last_data_addr, value_res, valid_value_count * sizeof(V));
-        last_data_addr += valid_value_count * sizeof(V);
-      }
+        return pop_count;
+      } else {
     #endif
+        
+        T *new_key_slots = key_allocator().allocate(size_);
+        P *new_payload_slots = payload_allocator().allocate(size_);
 
-      count = size - popcount;
+        for (int i = 0, j = 0; i < size_; i++) {
+          if (mask & (1 << i)) {
+            new_key_slots[j] = key_slots_[i];
+            new_payload_slots[j] = payload_slots_[i];
+            j++;
+          }
+        }
 
-      /* Update order */
+        /* Update order */
 
-      memset(order_slots_, 0, size * sizeof(order_t));
-      min_idx = min_key_idx;
+        memset(order_slots_, 0, size_ * sizeof(order_t));
+        min_idx = min_key_idx;
 
-      order_t match_idx;
+        order_t match_idx;
 
-      for (int i = 0; i < size - 1; i++) {
+        for (int i = 0; i < size_ - 1; i++) {
+          match_idx = find_first_greater_than(key_slots_[min_key_idx], true);
+          order_slots_[min_key_idx] = match_idx;
+          min_key_idx = match_idx;
+        }
+
         match_idx = find_first_greater_than(key_slots_[min_key_idx], true);
         order_slots_[min_key_idx] = match_idx;
-        min_key_idx = match_idx;
+        order_slots_[match_idx] = -1;
+        max_idx = match_idx;
+
+        /*** Initial bitmap ***/
+
+        auto bitmap_size = static_cast<size_t>(std::ceil(size_ / 64.));
+        memset(delete_bitmap_, 0, bitmap_size);
+
+        return pop_count;
+    #ifdef USE_SIMD
       }
-
-      match_idx = find_first_greater_than(key_slots_[min_key_idx], true);
-      order_slots_[min_key_idx] = match_idx;
-      order_slots_[match_idx] = -1;
-      max_idx = match_idx;
-
-      /*** Initial bitmap ***/
-
-      auto bitmap_size = static_cast<size_t>(std::ceil(size / 64.));
-      memset(delete_bitmap_, 0, bitmap_size);
-
-      return popcount;
+    #endif
     }
 
     double utilization() {
