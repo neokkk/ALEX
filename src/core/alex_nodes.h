@@ -1113,7 +1113,8 @@ public:
   bool key_exists(const T &key) const {
     int position = predict_position(key);
     if (position < data_capacity_) {
-      return buffer_[position]->key_exists(key);
+      if (buffer_[position] != nullptr)
+        return buffer_[position]->key_exists(key);
     }
     return false;
   }
