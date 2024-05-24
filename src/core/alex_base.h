@@ -402,6 +402,7 @@ T reverse_bits(T num) {
 
 /*** SIMD ***/
 
+/*
 int64_t reduce_min_exclude_zero_SIMD(__m512i &vec) {
   const __m512i zero = _mm512_setzero_si512();
   __mmask8 mask = _mm512_cmpgt_epi64_mask(vec, zero); /// mask for greater than zero
@@ -411,6 +412,7 @@ int64_t reduce_min_exclude_zero_SIMD(__m512i &vec) {
   __m512i min_vec = _mm512_mask_blend_epi64(mask, max_val_vec, vec);
   return _mm512_reduce_min_epi64(min_vec);
 }
+*/
 
 /*** Miscellaneous helpers ***/
 

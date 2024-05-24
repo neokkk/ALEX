@@ -558,7 +558,8 @@ public:
     }
 
     int find_idx(T key, bool use_simd = false) {
-      int size = 1 << current_collision_factor;
+	printf("current_collision_factor: %d\n", current_collision_factor);
+      int size_ = 1 << current_collision_factor;
 
       printf("count: %d\n", count);
       if (count == 0 ||
@@ -570,7 +571,7 @@ public:
     #ifdef USE_SIMD
       std::cout << "simd lookup" << std::endl;
       const int unit_count = 512 / (sizeof(T) * byte);
-      const int vec_size = size / unit_count;
+      const int vec_size = size_ / unit_count;
       int i = 0;
       __m512i vkey = _mm512_set1_epi64(key);
 
@@ -588,7 +589,7 @@ public:
       }
 
       /// Handle remaining elements
-      for (int j = i * unit_count; j < size; j++) {
+      for (int j = i * unit_count; j < size_; j++) {
         if (node_->key_equal(key, key_slots_[j])) {
           return j;
         }
